@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Everything below comes from GitHub Actions settings (see README). Defaults only matter for local builds.
+def siteUrl  = (System.getenv('SITE_URL') ?: 'https://example.com').replaceAll('/+$', '')
+def siteHost = new URI(siteUrl).host
+def keystore = System.getenv('KEYSTORE_FILE')
+
+android {
+    namespace 'com.chasexrecords.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId (System.getenv('APP_ID') ?: 'com.chasexrecords.app')
+        minSdk 21
+        targetSdk 35
+        versionCode (System.getenv('VERSION_CODE') ?: '1').toInteger()
+        versionName (System.getenv('VERSION_NAME') ?: '1.0')
+        manifestPlaceholders = [hostName: siteHost, defaultUrl: siteUrl]
+    }
+
+    signingConfigs {
+        release {
+            if (keystore) {
+                storeFile file(keystore)
+                storePassword System.getenv('KEY_PASSWORD')
+                keyAlias 'chasex'
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (keystore) { signingConfig signingConfigs.release }
+        }
+    }
+
+    lint { checkReleaseBuilds false }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

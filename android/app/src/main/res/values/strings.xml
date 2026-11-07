@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chase X Records</string>
+    <!-- __SITE_URL__ is replaced by the build with your SITE_URL setting -->
+    <string name="asset_statements">[{\"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": {\"namespace\": \"web\", \"site\": \"__SITE_URL__\"}}]</string>
+</resources>
