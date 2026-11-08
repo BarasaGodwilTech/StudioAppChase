@@ -47,27 +47,10 @@ The phone cannot reach `localhost`, so the server must be online with https.
 4. Add that address to Google's **Authorized JavaScript origins**.
 5. Uploads (`public/uploads`) are wiped on redeploy unless you attach a volume, so use links for videos and artwork on the live site.
 
-## Make the Android APK
-Use a Trusted Web Activity. It opens your live site inside Chrome with no address bar, so Google sign-in works (Google blocks sign-in inside ordinary app web views).
-1. Go to https://www.pwabuilder.com, enter your https address and press Start.
-2. Choose **Package for stores > Android**. Pick a package id such as `com.chasexrecords.app`, keep the name "Chase X Records", then Generate.
-3. Download the zip. It holds the APK, the AAB (for Google Play) and a **signing key. Keep that key safe forever**; updates must use the same key.
-4. Copy the SHA-256 fingerprint PWABuilder shows. Put it and the package id into the host variables `ANDROID_SHA256` and `ANDROID_PACKAGE`, then redeploy. This removes the browser bar at the top of the app.
-5. Send the APK to a phone and install it (allow "install unknown apps"). For Google Play use the AAB and a Play developer account (one-time fee).
-If you change the app later, just redeploy the site. The APK does not need rebuilding unless you change its name or icon.
+## Android app (real app, no browser bar)
+The folder `android/` is a native Android app that shows your live site in its own full-screen window. It does not use Chrome, so the domain/share bar can never appear, and it needs no fingerprint setup.
+1. GitHub repo > Settings > Secrets and variables > Actions > **Variables**: `SITE_URL` = your https address (for example `https://studioappchase.onrender.com`).
+2. Actions tab > **Build Android app** > Run workflow. Download `chase-x-app` and install the APK.
+3. **Google sign-in in the app:** in Google Cloud Console > Credentials > your Web client > *Authorized redirect URIs*, add `https://YOUR-SITE/auth/google/callback` (for example `https://studioappchase.onrender.com/auth/google/callback`). Email sign-in works without this.
 
-## Build the Android app with GitHub Actions
-The folder `android/` is a small Android app that opens your live site full screen, and `.github/workflows/` holds the two build recipes. Nothing to install on your computer.
-**One-time setup** (repository > Settings > Secrets and variables > Actions)
-1. Variables tab > New variable: `SITE_URL` = your live https address (no slash at the end). Optional: `APP_ID` = your package name (default `com.chasexrecords.app`).
-2. Secrets tab > New secret: `KEY_PASSWORD` = a strong password you choose. Save it somewhere safe.
-3. Actions tab > **Create signing key (run once)** > Run workflow. When it finishes, open the run: the summary shows your **SHA-256 fingerprint**, and the page bottom has an artifact `chasex-keystore`. Download it within a day (it is deleted after that) and keep `chasex.keystore` safe forever. Updates must use this same key.
-4. Turn the keystore into text and save it as a second secret named `KEYSTORE_BASE64`. On Windows, in PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("chasex.keystore")) | Set-Clipboard`, then paste.
-5. On your server (Railway) set `ANDROID_PACKAGE` to the package name and `ANDROID_SHA256` to the fingerprint, then redeploy. This removes the browser bar inside the app.
-**Every build:** Actions tab > **Build Android app** > Run workflow (or push a tag such as `v1.0`). When it finishes, download `chase-x-app` from the run page. It contains the APK to install on phones, and a `.aab` file for Google Play.
-Without the `KEYSTORE_BASE64` secret it builds a test APK that still installs but shows the browser bar. If Google Play App Signing is used later, add Google's fingerprint to `ANDROID_SHA256` too, separated by a comma.
-
-## Deploying later
-
-## Folders
-`server/` API + database setup, `public/` the app, `public/admin/` admin panel, `public/videos/` your hero and Blessed videos.
+Optional, for updating the app over an old install and for Google Play: run **Create signing key (run once)**, save `KEY_PASSWORD` and `KEYSTORE_BASE64` as secrets (see the workflow), and builds become signed releases. Without them you get a test-signed APK that still installs and looks identical. `ANDROID_PACKAGE` / `ANDROID_SHA256` are no longer needed.

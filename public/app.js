@@ -250,6 +250,7 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b
  case'signin':showAuth();break;
  case'out':signOut();break;
  case'sw':{const k=b.dataset.k;prefs[k]=prefs[k]?0:1;sv('cx-prefs',prefs);b.setAttribute('aria-checked',!!prefs[k]);vsync();setMedia(TK(P.cur)||{})}break;
+ case'gapp':location.href='/auth/google/start';break;
  case'gfall':toast('Google sign-in is not set up yet. Add GOOGLE_CLIENT_ID to the .env file.');break;
  }});
 document.addEventListener('input',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f)bf[f]=e.target.value});
@@ -271,6 +272,7 @@ async function refreshMe(){if(!token)return;try{const j=await api('/me');user=j.
 let mode=0,GCID='';
 const EMAIL=/^\S+@\S+\.\S+$/;
 const fld=(id,l,ty,ph,ac)=>`<div class="fld"><label for="${id}">${l}</label><div class="inw" id="w${id}"><input id="${id}" type="${ty}" placeholder="${ph}" autocomplete="${ac}" aria-describedby="${id}e">${ty==='password'?`<button type="button" class="ib" data-a="pw" aria-label="Show password" aria-pressed="false">${ic('eye')}</button>`:''}</div><p class="er" id="${id}e" role="alert"></p></div>`;
+const APP=/ChaseXApp/.test(navigator.userAgent);
 const GSVG='<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
 function authUI(){const m=mode;$('#at').textContent=m?'Create your account':'Welcome back';$('#as').textContent=m?'Save songs, book sessions and lessons, and watch exclusive videos.':'Sign in to pick up where you left off.';
  $('#tg').style.setProperty('--i',m);$$('#tg button').forEach((b,i)=>b.setAttribute('aria-pressed',i===m));
@@ -290,6 +292,7 @@ $('#af').addEventListener('submit',async e=>{e.preventDefault();if(!val())return
 
 /* Google sign-in: Google's own button (correct logo and branding); the credential is verified on the server */
 function renderGoogle(){const box=$('#gbtn');
+ if(APP&&GCID){box.innerHTML=`<button class="gfall" type="button" data-a="gapp">${GSVG}<span>Continue with Google</span></button>`;return}
  if(!GCID){box.innerHTML=`<button class="gfall" type="button" data-a="gfall">${GSVG}<span>Continue with Google</span></button>`;return}
  need('https://accounts.google.com/gsi/client',()=>window.google&&google.accounts&&google.accounts.id).then(()=>{
   google.accounts.id.initialize({client_id:GCID,callback:async r=>{try{enter(await api('/auth/google',{body:{credential:r.credential}}))}catch(err){toast(err.message)}}});
@@ -315,6 +318,7 @@ hprime();hprog();
  try{const [c,b]=await Promise.all([api('/config'),api('/bootstrap')]);GCID=c.googleClientId||'';Object.assign(S,{tracks:b.tracks,artists:b.artists,videos:b.videos,services:b.services,settings:b.settings})}
  catch(e){toast('Cannot reach the server. Start it with start.bat and open http://localhost:3000')}
  authUI();bars();
+ {const ac=new URLSearchParams(location.search).get('ac');if(ac){history.replaceState(null,'','/');try{enter(await api('/auth/app-exchange',{body:{code:ac}}))}catch(e){toast(e.message)}}}
  if(token){hideAuth();refreshMe()}else if(ld('cx-guest',0)){hideAuth()}else showAuth();
  setTimeout(()=>$('#splash').classList.add('gone'),600);
 })();

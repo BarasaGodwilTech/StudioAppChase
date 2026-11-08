@@ -109,6 +109,50 @@ app.post('/api/auth/google', limit(20, 600000), wrap(async (req, res) => {
   res.json({ token: sign(u), user: pub(u) });
 }));
 
+/* ---------- Google sign-in for the installed Android app ----------
+   Google blocks its sign-in page inside app web views, so the app opens it in the phone's secure browser tab.
+   Google sends the result here, we sign the person in, and hand a one-time code back to the app. */
+const appCodes = new Map();
+const APP_SCHEME = 'chasexrecords';
+const origin = req => (process.env.SITE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+const cookieOf = (req, n) => ((req.headers.cookie || '').split(/;\s*/).find(c => c.startsWith(n + '=')) || '').slice(n.length + 1);
+const page = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#060A08;color:#fff;font:16px system-ui,sans-serif;text-align:center;padding:24px"><div>${body}</div>`;
+
+app.get('/auth/google/start', limit(30, 600000), (req, res) => {
+  if (!GID) return res.status(503).send(page('Not set up', '<p>Google sign-in is not set up yet.</p>'));
+  const nonce = crypto.randomBytes(16).toString('hex');
+  res.setHeader('Set-Cookie', `gn=${nonce}; Max-Age=600; Path=/auth/google; HttpOnly; SameSite=None; Secure`);
+  const u = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  u.search = new URLSearchParams({ client_id: GID, redirect_uri: origin(req) + '/auth/google/callback', response_type: 'id_token',
+    scope: 'openid email profile', nonce, response_mode: 'form_post', prompt: 'select_account' }).toString();
+  res.redirect(u.toString());
+});
+
+app.post('/auth/google/callback', express.urlencoded({ extended: false, limit: '20kb' }), limit(30, 600000), async (req, res) => {
+  const back = msg => res.status(400).send(page('Sign-in failed', `<h2>Sign-in failed</h2><p>${msg}</p><p>Close this tab and try again.</p>`));
+  try {
+    if (!google) return back('Google sign-in is not set up yet.');
+    const p = (await google.verifyIdToken({ idToken: req.body.id_token, audience: GID })).getPayload();
+    const nonce = cookieOf(req, 'gn');
+    if (!nonce || p.nonce !== nonce) return back('This sign-in expired.');
+    if (!p.email || !p.email_verified) return back('Your Google email is not verified.');
+    const u = await userFor({ email: p.email, name: p.name || p.email.split('@')[0], googleId: p.sub, avatar: p.picture });
+    const code = crypto.randomBytes(24).toString('hex');
+    appCodes.set(code, { token: sign(u), user: pub(u), exp: Date.now() + 120000 });
+    for (const [k, v] of appCodes) if (v.exp < Date.now()) appCodes.delete(k);
+    const link = `${APP_SCHEME}://auth?c=${code}`;
+    res.setHeader('Set-Cookie', 'gn=; Max-Age=0; Path=/auth/google; HttpOnly; SameSite=None; Secure');
+    res.send(page('Signed in', `<h2>You are signed in</h2><p>Returning to the app…</p><p><a style="color:#9CFF57" href="${link}">Tap here if it does not open</a></p><script>location.replace(${JSON.stringify(link)})</script>`));
+  } catch (e) { console.error(e.message); back('Google sign-in could not be verified.'); }
+});
+
+app.post('/api/auth/app-exchange', limit(30, 600000), wrap(async (req, res) => {
+  const c = appCodes.get(String(req.body.code || ''));
+  appCodes.delete(String(req.body.code || ''));
+  if (!c || c.exp < Date.now()) throw fail(401, 'Sign-in expired. Please try again.');
+  res.json({ token: c.token, user: c.user });
+}));
+
 app.get('/api/me', auth(), wrap(async (req, res) => {
   const u = (await q('SELECT * FROM users WHERE id=$1', [req.user.id])).rows[0];
   if (!u) throw fail(401, 'Please sign in again.');
@@ -230,7 +274,7 @@ app.delete('/api/admin/:res/:id', admin, wrap(async (req, res) => {
 
 /* ---------- static + start ---------- */
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
-/* Lets the installed Android app (Trusted Web Activity) open full screen without a browser address bar */
+/* Optional: only needed if you ever switch back to a Trusted Web Activity app. The current app does not use it. */
 app.get('/.well-known/assetlinks.json', (_req, res) => {
   const pkg = process.env.ANDROID_PACKAGE, fp = (process.env.ANDROID_SHA256 || '').split(',').map(s => s.trim()).filter(Boolean);
   res.json(pkg && fp.length ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: fp } }] : []);

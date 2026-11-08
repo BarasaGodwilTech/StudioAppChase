@@ -28,7 +28,6 @@ jobs:
             echo "Add a repository variable named SITE_URL, for example https://your-app.onrender.com"
             exit 1
           fi
-          sed -i "s#__SITE_URL__#${SITE_URL%/}#" android/app/src/main/res/values/strings.xml
 
       - name: Prepare signing key
         id: key
