@@ -54,3 +54,7 @@ The folder `android/` is a native Android app that shows your live site in its o
 3. **Google sign-in in the app:** in Google Cloud Console > Credentials > your Web client > *Authorized redirect URIs*, add `https://YOUR-SITE/auth/google/callback` (for example `https://studioappchase.onrender.com/auth/google/callback`). Email sign-in works without this.
 
 Optional, for updating the app over an old install and for Google Play: run **Create signing key (run once)**, save `KEY_PASSWORD` and `KEYSTORE_BASE64` as secrets (see the workflow), and builds become signed releases. Without them you get a test-signed APK that still installs and looks identical. `ANDROID_PACKAGE` / `ANDROID_SHA256` are no longer needed.
+
+## Website and app layouts
+One codebase, three layouts: phones get the bottom navigation (always visible), tablets get a slim left sidebar, and desktops get a full sidebar with your library (Liked songs, recently played), wide content grids and a Spotify-style player bar at the bottom. Likes and bookings need an account; browsing and listening do not. Streams are counted after about 30 seconds of listening.
+The Android app shows the live website, so these changes reach the app automatically after you redeploy. No new APK is needed.

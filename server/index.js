@@ -73,11 +73,13 @@ app.get('/api/bootstrap', wrap(async (_req, res) => {
     settings: Object.fromEntries(settings.rows.map(r => [r.key, r.value])) });
 }));
 
-app.post('/api/tracks/:id/play', wrap(async (req, res) => {
+/* A "stream" is counted by the app after about 30 seconds of listening. One visitor can add one stream per song every 25 seconds. */
+app.post('/api/tracks/:id/play', limit(1, 25000), wrap(async (req, res) => {
   const id = +req.params.id;
-  await q('UPDATE tracks SET plays=plays+1 WHERE id=$1', [id]);
+  const r = await q("UPDATE tracks SET plays=plays+1 WHERE id=$1 AND status='published' RETURNING plays", [id]);
+  if (!r.rows[0]) throw fail(404, 'Song not found.');
   await q('INSERT INTO plays(track_id) VALUES($1)', [id]);
-  res.json({ ok: true });
+  res.json({ ok: true, plays: r.rows[0].plays });
 }));
 app.post('/api/videos/:id/view', wrap(async (req, res) => { await q('UPDATE videos SET views=views+1 WHERE id=$1', [+req.params.id]); res.json({ ok: true }); }));
 
@@ -108,6 +110,9 @@ app.post('/api/auth/google', limit(20, 600000), wrap(async (req, res) => {
   const u = await userFor({ email: p.email, name: p.name || p.email.split('@')[0], googleId: p.sub, avatar: p.picture });
   res.json({ token: sign(u), user: pub(u) });
 }));
+
+/* Lightweight check used by the Android app (and keep-alive pings) to know the server is awake */
+app.get('/healthz', (_req, res) => { res.set('Cache-Control', 'no-store'); res.type('text/plain').send('ok'); });
 
 /* ---------- Google sign-in for the installed Android app ----------
    Google blocks its sign-in page inside app web views, so the app opens it in the phone's secure browser tab.
@@ -156,14 +161,16 @@ app.post('/api/auth/app-exchange', limit(30, 600000), wrap(async (req, res) => {
 app.get('/api/me', auth(), wrap(async (req, res) => {
   const u = (await q('SELECT * FROM users WHERE id=$1', [req.user.id])).rows[0];
   if (!u) throw fail(401, 'Please sign in again.');
-  const likes = (await q('SELECT track_id FROM likes WHERE user_id=$1', [u.id])).rows.map(r => r.track_id);
+  const likes = (await q('SELECT track_id FROM likes WHERE user_id=$1 ORDER BY liked_at DESC', [u.id])).rows.map(r => r.track_id);
   const bookings = (await q(`SELECT b.id,b.kind,b.date::text,b.slot,b.status,s.name AS service FROM bookings b LEFT JOIN services s ON s.id=b.service_id
     WHERE b.user_id=$1 ORDER BY b.date DESC, b.slot DESC LIMIT 20`, [u.id])).rows;
   res.json({ user: pub(u), likes, bookings });
 }));
 
 app.post('/api/tracks/:id/like', auth(), wrap(async (req, res) => {
-  const id = +req.params.id, del = await q('DELETE FROM likes WHERE user_id=$1 AND track_id=$2', [req.user.id, id]);
+  const id = +req.params.id;
+  if (!(await q('SELECT 1 FROM tracks WHERE id=$1', [id])).rows[0]) throw fail(404, 'Song not found.');
+  const del = await q('DELETE FROM likes WHERE user_id=$1 AND track_id=$2', [req.user.id, id]);
   if (del.rowCount) await q('UPDATE tracks SET likes=GREATEST(likes-1,0) WHERE id=$1', [id]);
   else { await q('INSERT INTO likes VALUES($1,$2)', [req.user.id, id]); await q('UPDATE tracks SET likes=likes+1 WHERE id=$1', [id]); }
   res.json({ liked: !del.rowCount });
@@ -175,7 +182,7 @@ app.get('/api/bookings/taken', wrap(async (req, res) => {
   res.json(r.rows.map(x => x.slot));
 }));
 
-app.post('/api/bookings', auth(false), limit(10, 600000), wrap(async (req, res) => {
+app.post('/api/bookings', auth(), limit(10, 600000), wrap(async (req, res) => {
   const { service_id, date, slot, name = '', phone = '', email = '', notes = '' } = req.body;
   const s = (await q('SELECT * FROM services WHERE id=$1 AND active', [service_id])).rows[0];
   if (!s) throw fail(400, 'Pick a service.');
@@ -185,7 +192,7 @@ app.post('/api/bookings', auth(false), limit(10, 600000), wrap(async (req, res) 
   if (phone.replace(/\D/g, '').length < 9) throw fail(400, 'Enter a phone number we can reach you on.');
   try {
     const b = (await q('INSERT INTO bookings(service_id,kind,user_id,name,phone,email,date,slot,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
-      [s.id, s.kind, req.user ? req.user.id : null, name.trim(), phone.trim(), email.trim() || null, date, slot, notes.slice(0, 500)])).rows[0];
+      [s.id, s.kind, req.user.id, name.trim(), phone.trim(), email.trim() || null, date, slot, notes.slice(0, 500)])).rows[0];
     res.json({ ok: true, id: b.id });
   } catch (e) { if (e.code === '23505') throw fail(409, 'That time was just taken. Pick another slot.'); throw e; }
 }));

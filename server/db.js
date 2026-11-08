@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 
 async function init() {
   await q(SCHEMA);
+  await q('ALTER TABLE likes ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ DEFAULT now()');
   await q("UPDATE videos SET subtitle='Chase X Records' WHERE subtitle='Chase X - 3 parts'");
   const { rows } = await q('SELECT count(*)::int AS n FROM tracks');
   if (rows[0].n === 0) await seed();
