@@ -2,21 +2,24 @@ plugins {
     id 'com.android.application'
 }
 
-// Everything below comes from GitHub Actions settings (see README). Defaults only matter for local builds.
-def siteUrl  = (System.getenv('SITE_URL') ?: 'https://example.com').replaceAll('/+$', '')
-def siteHost = new URI(siteUrl).host
-def keystore = System.getenv('KEYSTORE_FILE')
+// These come from the GitHub Actions settings. Defaults only matter for local builds.
+def siteUrl   = (System.getenv('SITE_URL') ?: 'https://example.com').replaceAll('/+$', '')
+def siteHost  = new URI(siteUrl).host
+def keystore  = System.getenv('KEYSTORE_FILE')
+def appId     = System.getenv('APP_ID') ?: 'com.chasexrecords.app'
+def vCode     = Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
+def vName     = System.getenv('VERSION_NAME') ?: '1.0'
 
 android {
     namespace 'com.chasexrecords.app'
     compileSdk 35
 
     defaultConfig {
-        applicationId (System.getenv('APP_ID') ?: 'com.chasexrecords.app')
+        applicationId appId
         minSdk 21
         targetSdk 35
-        versionCode (System.getenv('VERSION_CODE') ?: '1').toInteger()
-        versionName (System.getenv('VERSION_NAME') ?: '1.0')
+        versionCode vCode
+        versionName vName
         manifestPlaceholders = [hostName: siteHost, defaultUrl: siteUrl]
     }
 
