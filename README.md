@@ -61,10 +61,10 @@ The folder `android/` is a small Android app that opens your live site full scre
 **One-time setup** (repository > Settings > Secrets and variables > Actions)
 1. Variables tab > New variable: `SITE_URL` = your live https address (no slash at the end). Optional: `APP_ID` = your package name (default `com.chasexrecords.app`).
 2. Secrets tab > New secret: `KEY_PASSWORD` = a strong password you choose. Save it somewhere safe.
-3. Actions tab > **Create signing key (run once)** > Run workflow. When it finishes, open the run: the summary shows your **SHA-256 fingerprint**, and the page bottom has an artifact `chasex-keystore`. Download it within a day (it is deleted after that) and keep `chasex.keystore` safe forever. Updates must use this same key.
+3. Actions tab > **1 - Create signing key (run once)** > Run workflow. When it finishes, open the run: the summary shows your **SHA-256 fingerprint**, and the page bottom has an artifact `chasex-keystore`. Download it within a day (it is deleted after that) and keep `chasex.keystore` safe forever. Updates must use this same key.
 4. Turn the keystore into text and save it as a second secret named `KEYSTORE_BASE64`. On Windows, in PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("chasex.keystore")) | Set-Clipboard`, then paste.
 5. On your server (Railway) set `ANDROID_PACKAGE` to the package name and `ANDROID_SHA256` to the fingerprint, then redeploy. This removes the browser bar inside the app.
-**Every build:** Actions tab > **Build Android app** > Run workflow (or push a tag such as `v1.0`). When it finishes, download `chase-x-app` from the run page. It contains the APK to install on phones, and a `.aab` file for Google Play.
+**Every build:** Actions tab > **2 - Build Android app** > Run workflow (or push a tag such as `v1.0`). When it finishes, download `chase-x-app` from the run page. It contains the APK to install on phones, and a `.aab` file for Google Play.
 Without the `KEYSTORE_BASE64` secret it builds a test APK that still installs but shows the browser bar. If Google Play App Signing is used later, add Google's fingerprint to `ANDROID_SHA256` too, separated by a comma.
 
 ## Deploying later
