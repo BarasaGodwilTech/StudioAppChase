@@ -58,3 +58,15 @@ Optional, for updating the app over an old install and for Google Play: run **Cr
 ## Website and app layouts
 One codebase, three layouts: phones get the bottom navigation (always visible), tablets get a slim left sidebar, and desktops get a full sidebar with your library (Liked songs, recently played), wide content grids and a Spotify-style player bar at the bottom. Likes and bookings need an account; browsing and listening do not. Streams are counted after about 30 seconds of listening.
 The Android app shows the live website, so these changes reach the app automatically after you redeploy. No new APK is needed.
+
+## Background music (Android app)
+While a song plays, the app runs a media service: music keeps going with the screen off or the app closed with Back, and the lock screen and notification show play / pause / next / previous. Android 13+ asks once for notification permission the first time you play. Add `CONTACT_EMAIL` on Render to show your email on the privacy page at `/privacy`. This needs a new APK build.
+
+## Automatic BPM and the Workout page
+- Songs at or above the BPM limit (default 100, change it in Admin > Settings > Workout page) show on the Workout page by themselves. Tag a song `workout` to always include it, or `no-workout` to keep it off.
+- A song with no BPM is measured in the background after you save it, and again a little after the server starts:
+  - **Link to an audio file** (.mp3, .wav, .ogg, .m4a): the server downloads it and measures the tempo.
+  - **Anything else:** the Deezer music database is checked by artist and title.
+  - **YouTube, Spotify and SoundCloud links cannot be measured** (they do not share their audio, and Spotify removed its tempo data). For those, open the song in Admin and use **From file** (pick your own copy of the song; it is measured and not stored) or **Tap** (tap along to the beat), then Save.
+- Admin > Songs > **Detect BPMs** measures every song that has none. A small "auto" label shows which BPMs were measured for you.
+- Accuracy: slow songs can be read as double speed by this kind of detector, so readings above 165 are halved. A real 170+ BPM song (drum and bass) will read as half, so type its real BPM in.

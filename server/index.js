@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const { q, init } = require('./db');
 const { detect, info } = require('./linkinfo');
+const { detectTrack, fromBuffer } = require('./bpm');
 const fs = require('fs');
 const crypto = require('crypto');
 
@@ -58,7 +59,7 @@ async function userFor({ email, name, googleId, avatar }) {
 /* ---------- public ---------- */
 app.get('/api/config', (_req, res) => res.json({ googleClientId: GID }));
 
-const trackSql = `SELECT t.id,t.title,t.artist_id,a.name AS artist,t.genre,t.link,t.artwork,t.palette,t.duration,t.bpm,t.tags,t.featured,t.status,t.plays,t.likes,t.release_date::text AS release_date
+const trackSql = `SELECT t.id,t.bpm_source,t.title,t.artist_id,a.name AS artist,t.genre,t.link,t.artwork,t.palette,t.duration,t.bpm,t.tags,t.featured,t.status,t.plays,t.likes,t.release_date::text AS release_date
   FROM tracks t LEFT JOIN artists a ON a.id=t.artist_id`;
 const withPlatform = r => ({ ...r, platform: detect(r.link) });
 
@@ -73,14 +74,23 @@ app.get('/api/bootstrap', wrap(async (_req, res) => {
     settings: Object.fromEntries(settings.rows.map(r => [r.key, r.value])) });
 }));
 
-/* A "stream" is counted by the app after about 30 seconds of listening. One visitor can add one stream per song every 25 seconds. */
-app.post('/api/tracks/:id/play', limit(1, 25000), wrap(async (req, res) => {
+/* A "stream" is counted by the app after about 30 seconds of listening.
+   One listener (signed-in user, or an anonymous hash of their connection) adds one stream per song every 25 seconds.
+   The check lives in the database, so it still works after the server restarts. */
+app.post('/api/tracks/:id/play', auth(false), limit(40, 60000), wrap(async (req, res) => {
   const id = +req.params.id;
+  const who = req.user ? 'u' + req.user.id : 'i' + crypto.createHash('sha256').update(String(req.ip) + SECRET).digest('hex').slice(0, 16);
+  const dup = await q("SELECT 1 FROM plays WHERE track_id=$1 AND who=$2 AND at > now()-interval '25 seconds' LIMIT 1", [id, who]);
+  if (dup.rows[0]) {
+    const t = await q('SELECT plays FROM tracks WHERE id=$1', [id]);
+    return res.json({ ok: true, counted: false, plays: t.rows[0] ? t.rows[0].plays : 0 });
+  }
   const r = await q("UPDATE tracks SET plays=plays+1 WHERE id=$1 AND status='published' RETURNING plays", [id]);
   if (!r.rows[0]) throw fail(404, 'Song not found.');
-  await q('INSERT INTO plays(track_id) VALUES($1)', [id]);
-  res.json({ ok: true, plays: r.rows[0].plays });
+  await q('INSERT INTO plays(track_id, who) VALUES($1,$2)', [id, who]);
+  res.json({ ok: true, counted: true, plays: r.rows[0].plays });
 }));
+
 app.post('/api/videos/:id/view', wrap(async (req, res) => { await q('UPDATE videos SET views=views+1 WHERE id=$1', [+req.params.id]); res.json({ ok: true }); }));
 
 /* ---------- auth ---------- */
@@ -109,6 +119,23 @@ app.post('/api/auth/google', limit(20, 600000), wrap(async (req, res) => {
   if (!p.email || !p.email_verified) throw fail(401, 'Your Google email is not verified.');
   const u = await userFor({ email: p.email, name: p.name || p.email.split('@')[0], googleId: p.sub, avatar: p.picture });
   res.json({ token: sign(u), user: pub(u) });
+}));
+
+/* Privacy policy (set CONTACT_EMAIL on Render to show your email address) */
+app.get('/privacy', wrap(async (_req, res) => {
+  const saved = (await q("SELECT value FROM settings WHERE key='contact_email'")).rows[0];
+  const mail = String((saved && saved.value) || process.env.CONTACT_EMAIL || '').replace(/[<>"&]/g, '');
+  const contact = mail ? `email us at <a href="mailto:${mail}">${mail}</a>` : 'contact us through the details on our website or social pages';
+  res.type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Privacy policy · Chase X Records</title>
+<style>body{margin:0;background:#060A08;color:#EAF2EC;font:16px/1.65 system-ui,sans-serif}main{max-width:720px;margin:0 auto;padding:40px 22px 80px}h1{font-size:34px;margin:0 0 6px}h2{font-size:19px;margin:30px 0 6px;color:#9CFF57}p,li{color:#C4D1C8}a{color:#9CFF57}small{color:#7E8C83}</style>
+<main><h1>Privacy policy</h1><small>Chase X Records · last updated ${new Date().toISOString().slice(0, 10)}</small>
+<h2>What we collect</h2><ul><li><b>Account:</b> your name, email and a scrambled (hashed) password. If you use Google sign-in, your name, email and profile photo from Google. We never see your Google password.</li>
+<li><b>Likes:</b> the songs you like.</li><li><b>Bookings:</b> the name, phone number, notes, service, date and time you send when you request a session or lesson.</li>
+<li><b>Listening counts:</b> when you listen to a song for about 30 seconds we add one stream. To stop counting the same person twice we store your account number or a scrambled code made from your connection, never your plain IP address.</li>
+<li><b>On your device:</b> your sign-in, recently played songs and settings are saved in your browser or app so it works the next time you open it.</li></ul>
+<h2>What we do with it</h2><p>We use it to run the app: sign you in, show your liked songs, handle your bookings, and show artists how many streams their songs have. We do not sell your information and we do not show ads.</p>
+<h2>Other services</h2><p>Songs and videos play through YouTube, SoundCloud, Spotify or direct files. Those services may set their own cookies and have their own privacy policies. Google handles Google sign-in. Our website is hosted on Render.</p>
+<h2>Your choices</h2><p>You can ask us to see, correct or delete your account and its data at any time. To do that, ${contact}.</p></main>`);
 }));
 
 /* Lightweight check used by the Android app (and keep-alive pings) to know the server is awake */
@@ -199,12 +226,32 @@ app.post('/api/bookings', auth(), limit(10, 600000), wrap(async (req, res) => {
 
 /* ---------- admin ---------- */
 const RES = {
-  tracks: ['title', 'artist_id', 'genre', 'link', 'artwork', 'palette', 'duration', 'bpm', 'tags', 'featured', 'status', 'release_date'],
+  tracks: ['title', 'artist_id', 'genre', 'link', 'artwork', 'palette', 'duration', 'bpm', 'bpm_source', 'tags', 'featured', 'status', 'release_date'],
   artists: ['name', 'genre', 'bio', 'image', 'instagram', 'palette', 'status'],
   videos: ['title', 'subtitle', 'url', 'parts', 'poster', 'track_id', 'sort', 'status'],
   services: ['kind', 'name', 'description', 'price', 'duration_min', 'active', 'sort']
 };
 const clean = v => (v === '' ? null : v);
+
+/* ---------- automatic BPM ----------
+   New or edited songs without a BPM are measured in the background (audio-file links), or looked up in Deezer. */
+const bpmQueue = []; let bpmBusy = false;
+function queueBpm(id) { if (!bpmQueue.includes(id)) { bpmQueue.push(id); runBpm(); } }
+async function runBpm() {
+  if (bpmBusy) return; bpmBusy = true;
+  try {
+    while (bpmQueue.length) {
+      const id = bpmQueue.shift();
+      try {
+        const t = (await q('SELECT t.id,t.title,t.link,t.bpm,a.name AS artist FROM tracks t LEFT JOIN artists a ON a.id=t.artist_id WHERE t.id=$1', [id])).rows[0];
+        if (!t || t.bpm || !t.link) continue;
+        const r = await detectTrack(t);
+        if (r.bpm) await q('UPDATE tracks SET bpm=$1,bpm_source=$2,bpm_checked=now() WHERE id=$3 AND bpm IS NULL', [r.bpm, r.source, id]);
+        else await q('UPDATE tracks SET bpm_checked=now() WHERE id=$1', [id]);
+      } catch (e) { console.error('BPM detection failed for song', id, e.message); }
+    }
+  } finally { bpmBusy = false; }
+}
 
 app.get('/api/admin/stats', admin, wrap(async (req, res) => {
   const days = [7, 30, 90].includes(+req.query.days) ? +req.query.days : 7;
@@ -244,6 +291,22 @@ app.get('/api/admin/link-info', admin, wrap(async (req, res) => {
   try { res.json(await info(String(req.query.url || ''))); } catch (e) { throw fail(400, e.message); }
 }));
 
+/* Measure a song's BPM: from a pasted link, from an audio file the admin picks (not stored), or measure everything that is missing */
+app.post('/api/admin/bpm/link', admin, wrap(async (req, res) => {
+  const b = req.body || {};
+  res.json(await detectTrack({ link: String(b.link || ''), artist: String(b.artist || ''), title: String(b.title || '') }));
+}));
+app.post('/api/admin/bpm/file', ...admin, express.raw({ type: () => true, limit: '40mb' }), wrap(async (req, res) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw fail(400, 'The file was empty.');
+  try { const r = await fromBuffer(req.body); res.json({ bpm: r.bpm, confidence: r.confidence, source: 'file', notes: [] }); }
+  catch (e) { throw fail(400, e.message); }
+}));
+app.post('/api/admin/bpm/missing', admin, wrap(async (_req, res) => {
+  const ids = (await q('SELECT id FROM tracks WHERE bpm IS NULL AND link IS NOT NULL ORDER BY id')).rows.map(r => r.id);
+  ids.forEach(queueBpm);
+  res.json({ queued: ids.length });
+}));
+
 const UP = path.join(__dirname, '..', 'public', 'uploads');
 const EXT = { jpg: 8, jpeg: 8, png: 8, webp: 8, gif: 8, mp4: 250, webm: 250, mov: 250 };
 app.post('/api/admin/upload', ...admin, express.raw({ type: () => true, limit: '250mb' }), wrap(async (req, res) => {
@@ -266,12 +329,14 @@ app.post('/api/admin/:res', admin, wrap(async (req, res) => {
   const r = req.params.res, cols = RES[r]; if (!cols) throw fail(404, 'Not found.');
   const keys = cols.filter(c => c in req.body);
   const row = (await q(`INSERT INTO ${r}(${keys.join(',')}) VALUES(${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING id`, keys.map(k => clean(req.body[k])))).rows[0];
+  if (r === 'tracks') queueBpm(row.id);
   res.json(row);
 }));
 app.put('/api/admin/:res/:id', admin, wrap(async (req, res) => {
   const r = req.params.res, cols = RES[r]; if (!cols) throw fail(404, 'Not found.');
   const keys = cols.filter(c => c in req.body);
   if (keys.length) await q(`UPDATE ${r} SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1}`, [...keys.map(k => clean(req.body[k])), +req.params.id]);
+  if (r === 'tracks' && (keys.includes('link') || keys.includes('bpm'))) queueBpm(+req.params.id);
   res.json({ ok: true });
 }));
 app.delete('/api/admin/:res/:id', admin, wrap(async (req, res) => {
@@ -295,5 +360,9 @@ app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['htm
     await q("INSERT INTO users(name,email,password_hash,role) VALUES('Admin',$1,$2,'admin')", [process.env.ADMIN_EMAIL.toLowerCase(), await bcrypt.hash(process.env.ADMIN_PASSWORD, 11)]);
     console.log('Admin account created for', process.env.ADMIN_EMAIL);
   }
+  /* a while after start-up, measure songs that still have no BPM (each song is retried at most once a week) */
+  setTimeout(async () => {
+    try { (await q("SELECT id FROM tracks WHERE bpm IS NULL AND link IS NOT NULL AND (bpm_checked IS NULL OR bpm_checked < now()-interval '7 days') ORDER BY id LIMIT 60")).rows.forEach(r => queueBpm(r.id)); } catch (e) { console.error(e.message); }
+  }, 20000);
   app.listen(PORT, () => console.log(`\nChase X Records is running:\n  App    http://localhost:${PORT}\n  Admin  http://localhost:${PORT}/admin\n`));
 })();

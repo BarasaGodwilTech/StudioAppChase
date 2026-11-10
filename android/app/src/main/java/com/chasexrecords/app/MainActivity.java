@@ -4,7 +4,10 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.PictureInPictureParams;
+import android.Manifest;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -65,6 +68,9 @@ public class MainActivity extends Activity {
     private WebChromeClient.CustomViewCallback customViewCallback;
     private String siteHost;
     private volatile boolean destroyed = false;
+    private volatile boolean musicOn = false;
+    private boolean askedNotif = false;
+    private BroadcastReceiver mediaRx;
     private volatile int launchId = 0;
 
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility", "AddJavascriptInterface"})
@@ -76,7 +82,7 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         root.setBackgroundColor(BRAND);
 
-        web = new WebView(this);
+        web = new BgWebView(this);
         web.setBackgroundColor(BRAND);
         root.addView(web, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -112,6 +118,19 @@ public class MainActivity extends Activity {
 
         // Lets the website ask the app for floating (picture-in-picture) video.
         web.addJavascriptInterface(new NativeBridge(), "ChaseXNative");
+
+        // Notification / lock-screen buttons (play, pause, next, previous) control the web player.
+        mediaRx = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                String cmd = i.getStringExtra("cmd");
+                String fn = "toggle".equals(cmd) ? "toggle" : "next".equals(cmd) ? "next" : "prev".equals(cmd) ? "prev" : null;
+                if (fn != null && web != null) web.evaluateJavascript("window.cxMedia&&cxMedia." + fn + "()", null);
+            }
+        };
+        IntentFilter mf = new IntentFilter(PlaybackService.ACTION);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(mediaRx, mf, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(mediaRx, mf);
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -418,6 +437,21 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void pip() { runOnUiThread(() -> enterPip()); }
+
+        /** The page reports the current song so Android can show it on the lock screen and keep it playing. */
+        @JavascriptInterface
+        public void media(String title, String artist, boolean playing) {
+            runOnUiThread(() -> {
+                musicOn = playing;
+                if (web instanceof BgWebView) ((BgWebView) web).setKeepVisible(playing);
+                if (playing && Build.VERSION.SDK_INT >= 33 && !askedNotif
+                        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    askedNotif = true;
+                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
+                }
+                PlaybackService.update(MainActivity.this, title, artist, playing);
+            });
+        }
     }
 
     /** Leaving the app while a video is full screen floats it automatically. */
@@ -445,6 +479,8 @@ public class MainActivity extends Activity {
             hideCustomView();
         } else if (web.canGoBack()) {
             web.goBack();
+        } else if (musicOn) {
+            moveTaskToBack(true);   // keep the music playing, like other music apps
         } else {
             super.onBackPressed();
         }
@@ -458,9 +494,28 @@ public class MainActivity extends Activity {
 
     // The web view is deliberately never paused, so music keeps playing when you leave the app.
 
+    /** A web view that keeps reporting itself as visible while music plays, so the page does not pause in the background. */
+    private static class BgWebView extends WebView {
+        private boolean keepVisible = false;
+
+        BgWebView(Context c) { super(c); }
+
+        void setKeepVisible(boolean on) {
+            keepVisible = on;
+            if (!on) super.onWindowVisibilityChanged(getWindowVisibility());
+        }
+
+        @Override
+        protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(keepVisible ? View.VISIBLE : visibility);
+        }
+    }
+
     @Override
     protected void onDestroy() {
         destroyed = true;
+        try { if (mediaRx != null) unregisterReceiver(mediaRx); } catch (Exception ignored) { }
+        PlaybackService.stop(this);
         if (web != null) { root.removeView(web); web.destroy(); }
         super.onDestroy();
     }

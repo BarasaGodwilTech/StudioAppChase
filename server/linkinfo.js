@@ -81,4 +81,4 @@ async function info(rawUrl) {
   if (!out.title) out.notes.push('Could not read the details. Type them in.');
   return out;
 }
-module.exports = { detect, info, splitTitle };
+module.exports = { detect, info, splitTitle, safeUrl };

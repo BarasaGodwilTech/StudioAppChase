@@ -4,14 +4,21 @@
   "private": true,
   "description": "Chase X Records - link-based music app with admin, Postgres (Neon) backend",
   "main": "server/index.js",
-  "scripts": { "start": "node server/index.js", "dev": "node --watch server/index.js" },
-  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "audio-decode": "^3.12.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "google-auth-library": "^9.14.0",
     "jsonwebtoken": "^9.0.2",
+    "music-tempo": "^1.0.3",
     "pg": "^8.12.0"
   }
 }

@@ -27,7 +27,7 @@ async function api(path,o={}){const r=await fetch('/api'+path,{method:o.method||
  const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401&&token&&path==='/me')signOut(true);throw new Error(j.error||'Something went wrong.')}return j}
 
 /* ================= PLAYER ENGINE ================= */
-const P={q:[],cur:null,playing:false,loading:false,time:0,dur:0,shuf:false,rep:false,listened:0,lt:0,counted:false,ended:false,nx:null,warmed:false};
+const P={q:[],cur:null,playing:false,loading:false,time:0,dur:0,shuf:false,rep:false,listened:0,lt:0,counted:false,ended:false,nx:null,warmed:false,vol:+ld('cx-vol',1)};
 let ACT=null;const D={};
 const st=(n,v)=>ACT===n&&onState(v),tm=(n,t,d)=>ACT===n&&onTime(t,d),en=n=>ACT===n&&onEnd(),er=n=>ACT===n&&onErr();
 const need=(src,test)=>new Promise((res,rej)=>{if(test())return res();if(!document.querySelector(`script[data-s="${src}"]`)){const s=document.createElement('script');s.src=src;s.dataset.s=src;s.onerror=()=>rej(new Error('blocked'));document.head.appendChild(s)}
@@ -35,7 +35,7 @@ const need=(src,test)=>new Promise((res,rej)=>{if(test())return res();if(!docume
 window.onYouTubeIframeAPIReady=()=>{};window.onSpotifyIframeApiReady=a=>{window.__sp=a};
 const host=(html)=>$('#eng').insertAdjacentHTML('beforeend',`<div class="hostyt">${html}</div>`);
 
-D.youtube={ps:[null,null],ok:[0,0],rd:[null,null],cued:['',''],i:0,iv:null,get p(){return this.ps[this.i]},
+D.youtube={vol(v){this.ps.forEach(p=>{try{p&&p.setVolume&&p.setVolume(v*100)}catch(e){}})},ps:[null,null],ok:[0,0],rd:[null,null],cued:['',''],i:0,iv:null,get p(){return this.ps[this.i]},
  mk(slot,id){const me=this;const pr=new Promise(res=>{const el='ytp'+slot;host(`<div id="${el}"></div>`);
   const pl=new YT.Player(el,{width:200,height:200,videoId:id||undefined,playerVars:{playsinline:1,controls:0,rel:0,origin:location.origin},
    events:{onReady:()=>{me.ok[slot]=1;res(pl)},onStateChange:e=>{if(me.ps[me.i]!==pl)return;e.data===1?st('youtube',true):e.data===2?st('youtube',false):e.data===0&&en('youtube')},onError:()=>{if(me.ps[me.i]===pl)er('youtube')}}});
@@ -53,7 +53,7 @@ D.youtube={ps:[null,null],ok:[0,0],rd:[null,null],cued:['',''],i:0,iv:null,get p
  prime(id){if(this.ps[0]||!id||!(window.YT&&YT.Player))return;this.cued[0]=id;this.mk(0,id)},
  play(){this.p&&this.p.playVideo()},pause(){this.p&&this.p.pauseVideo()},seek(s){this.p&&this.p.seekTo(s,true)},stop(){clearInterval(this.iv);this.ps.forEach(p=>{try{p&&p.pauseVideo()}catch(e){}})}};
 
-D.soundcloud={w:null,d:0,async load(t,url){await need('https://w.soundcloud.com/player/api.js',()=>window.SC&&SC.Widget);this.d=0;
+D.soundcloud={vol(v){try{this.w&&this.w.setVolume(v*100)}catch(e){}},w:null,d:0,async load(t,url){await need('https://w.soundcloud.com/player/api.js',()=>window.SC&&SC.Widget);this.d=0;
  const o='&auto_play=true&hide_related=true&visual=false&show_comments=false',gd=()=>this.w.getDuration(ms=>this.d=ms/1000);
  if(!this.w){host(`<iframe id="scp" allow="autoplay" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(url)+o}"></iframe>`);this.w=SC.Widget($('#scp'));const E=SC.Widget.Events;
   this.w.bind(E.READY,gd);this.w.bind(E.PLAY,()=>st('soundcloud',true));this.w.bind(E.PAUSE,()=>st('soundcloud',false));this.w.bind(E.FINISH,()=>en('soundcloud'));this.w.bind(E.ERROR,()=>er('soundcloud'));
@@ -67,7 +67,7 @@ D.spotify={c:null,async load(t,uri){await need('https://open.spotify.com/embed/i
  else{this.c.loadUri(uri);this.c.play()}},
  play(){this.c&&this.c.resume?this.c.resume():this.c&&this.c.play()},pause(){this.c&&this.c.pause()},seek(s){this.c&&this.c.seek(s)},stop(){try{this.c.pause()}catch(e){}}};
 
-D.audio={els:[new Audio(),new Audio()],i:0,pre:'',init:0,get a(){return this.els[this.i]},
+D.audio={vol(v){this.els.forEach(e=>e.volume=v)},els:[new Audio(),new Audio()],i:0,pre:'',init:0,get a(){return this.els[this.i]},
  bind(){if(this.init)return;this.init=1;this.els.forEach(el=>{const on=(ev,f)=>el.addEventListener(ev,()=>{if(el===this.a)f()});on('play',()=>st('audio',true));on('pause',()=>st('audio',false));on('ended',()=>en('audio'));on('error',()=>er('audio'));on('timeupdate',()=>tm('audio',el.currentTime,el.duration||0))})},
  load(t,url){this.bind();if(this.pre===url&&!this.els[1-this.i].error){this.a.pause();this.i=1-this.i;this.pre=''}else{this.pre='';this.a.src=url}return this.a.play().catch(()=>{})},
  warm(url){this.bind();if(!url||this.pre===url)return;const n=this.els[1-this.i];n.preload='auto';n.src=url;n.load();this.pre=url},
@@ -78,7 +78,8 @@ function ref(t){const l=t.link||'';
  if(t.platform==='spotify'){const m=l.match(/spotify\.com\/(?:intl-[a-z]+\/)?(track|episode)\/(\w+)/);return m&&`spotify:${m[1]}:${m[2]}`}
  return l}
 function listFor(k){if(k==='L')return [...S.likes].filter(TK);if(k==='T')return S.tracks.filter(t=>t.plays>0).sort((a,b)=>b.plays-a.plays).slice(0,5).map(t=>t.id);if(k==='w')return S.tracks.filter(isW).map(t=>t.id);if(k&&k[0]==='a')return S.tracks.filter(t=>t.artist_id===+k.slice(1)).map(t=>t.id);return S.tracks.map(t=>t.id)}
-const isW=t=>(t.tags||[]).some(x=>/workout|gym|run/i.test(x));
+/* Workout = tagged workout/gym/run, or fast enough (BPM at or above the limit, default 100). Tag a song no-workout to keep it out. */
+const isW=t=>{const g=t.tags||[];if(g.some(x=>/^no-?workout$/i.test(x)))return false;if(g.some(x=>/workout|gym|run/i.test(x)))return true;return t.bpm>=(+(S.settings&&S.settings.workout_min_bpm)||100)};
 
 async function playTrack(id,key){const t=TK(id);if(!t)return;
  const ids=listFor(key);P.q=ids.includes(t.id)?ids:S.tracks.map(x=>x.id);
@@ -89,7 +90,8 @@ async function playTrack(id,key){const t=TK(id);if(!t)return;
  if(!kind||!r){P.loading=false;sync();toast(t.link?`This link opens on ${PL[t.platform]}. Tap Open to listen there.`:'This track has no listening link yet.');return}
  if(ACT&&ACT!==kind)D[ACT].stop();ACT=kind;
  try{await D[kind].load(t,r)}catch(e){onErr()}setMedia(t)}
-function onState(b){P.playing=b;if(b){P.loading=false;P.lt=Date.now();if(!P.warmed){P.warmed=true;setTimeout(warmNext,1800)}}sync()}
+function setVol(){const d=ACT&&D[ACT];if(d&&d.vol)d.vol(P.vol)}
+function onState(b){P.playing=b;if(b){setVol();P.loading=false;P.lt=Date.now();if(!P.warmed){P.warmed=true;setTimeout(warmNext,1800)}}sync()}
 function onTime(t,d){P.time=t||0;if(d&&isFinite(d)&&d>0)P.dur=d;
  if(P.playing){const n=Date.now();P.listened+=Math.min(1,(n-P.lt)/1000);P.lt=n;
   if(!P.counted&&P.listened>=(P.dur>0&&P.dur<60?P.dur*.5:30)){P.counted=true;const cid=P.cur;fetch('/api/tracks/'+cid+'/play',{method:'POST'}).then(r=>r.ok?r.json():null).then(j=>{const t=TK(cid);if(j&&t&&j.plays>t.plays){t.plays=j.plays;updSc(cid)}}).catch(()=>{});const t=TK(cid);if(t){t.plays++;updSc(cid)}}}else P.lt=Date.now();tick()}
@@ -100,6 +102,7 @@ function peekNext(){if(!P.q.length)return null;const i=P.q.indexOf(P.cur);
  return P.q[(i+1)%P.q.length]}
 function nextT(){const n=peekNext();if(n!=null)playTrack(n)}
 /* Gets the next song ready in the background so it starts without a gap */
+window.cxMedia={toggle:()=>toggle(),next:()=>nextT(),prev:()=>prevT()};
 function warmNext(){const n=peekNext(),t=n!=null&&n!==P.cur&&TK(n);if(!t)return;if(t.artwork)(new Image).src=t.artwork;const d=D[t.platform],r=d&&d.warm&&ref(t);if(r)try{d.warm(r)}catch(e){}}
 /* Streams: load the players ahead of the first tap, so the first song does not wait for them */
 function warmup(){const pf=new Set(S.tracks.map(t=>t.platform));
@@ -243,7 +246,7 @@ function mini(){const t=TK(P.cur),m=$('#mini');m.classList.toggle('on',!!t);
  m.innerHTML=`<div class="ml"><div class="mo" data-a="open" role="button" tabindex="0" aria-label="Open player">${art(t,'s')}<div class="mt"><b>${esc(t.title)}</b><span>${esc(P.loading?'Loading...':t.artist||'')}</span></div></div><button class="ib lk" data-a="like" data-i="${t.id}" aria-pressed="${l}" aria-label="${l?'Unlike':'Like'} ${esc(t.title)}">${ic('heart',l?'f pk':'')}</button></div>
  <div class="mc"><div class="mb2"><button class="ib x" data-a="shuf" aria-pressed="${P.shuf}" aria-label="Shuffle">${ic('shuf')}</button><button class="ib x" data-a="prev" aria-label="Previous">${ic('prev','f')}</button><button class="ib pp" data-a="toggle" aria-label="${P.playing?'Pause':'Play'}">${P.loading?SPIN:ic(P.playing?'pause':'play','f')}</button><button class="ib x" data-a="next" aria-label="Next">${ic('next')}</button><button class="ib x" data-a="rep" aria-pressed="${P.rep}" aria-label="Repeat">${ic('rep')}</button></div>
  <div class="msb"><span id="mt1">${fm(P.time)}</span><div class="msk" id="msk" role="slider" aria-label="Seek" tabindex="0"><i></i></div><span id="mt2">${P.dur?fm(P.dur):'0:00'}</span></div></div>
- <div class="mx"><span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b><em>streams</em></span><button class="ib" data-a="open" aria-label="Open full player">${ic('up')}</button></div><span class="mbar" id="mb"></span>`;tick()}
+ <div class="mx"><div class="vol" id="vol" role="slider" aria-label="Volume" tabindex="0" style="--p:${P.vol}">${ic('vol')}<div class="vk"><i></i></div></div><span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b><em>streams</em></span><button class="ib" data-a="open" aria-label="Open full player">${ic('up')}</button></div><span class="mbar" id="mb"></span>`;tick()}
 function np(){const t=TK(P.cur);if(!t)return;const l=S.likes.has(t.id),v=S.videos.findIndex(x=>x.track_id===t.id);
  $('#npa').setAttribute('style',sty(t));$('#npa').innerHTML=t.artwork?`<img src="${esc(t.artwork)}" alt="" onerror="this.remove()">`:'';$('#np').style.setProperty('--g',pal(t)[0]);
  $('#nti').textContent=t.title;$('#nar').textContent=(t.artist||'')+(t.genre?' · '+t.genre:'');$('#nsrc').textContent=srcLine(t);
@@ -252,7 +255,10 @@ function np(){const t=TK(P.cur);if(!t)return;const l=S.likes.has(t.id),v=S.video
  $('#npx').innerHTML=(t.link?`<button class="btn btn2" data-a="src">${ic('ext')}<span>Open on ${esc(PL[t.platform]||'link')}</span></button>`:'')+(v>=0?`<button class="btn btn2" data-a="vtab" data-i="${v}">${ic('tv')}<span>Video</span></button>`:'')}
 function bars(){const s=P.cur||1;$('#wv').innerHTML=[...Array(46)].map((_,i)=>`<i style="--h:${Math.round(10+40*Math.abs(Math.sin(i*.7+s)*Math.cos(i*.23)))}px"></i>`).join('')}
 function tick(){const p=P.dur?P.time/P.dur:0,b=$$('#wv i');b.forEach((e,i)=>e.classList.toggle('p',i/b.length<p));$('#t1').textContent=fm(P.time);$('#t2').textContent=P.dur?'-'+fm(P.dur-P.time):'0:00';const m=$('#mb');if(m)m.style.setProperty('--p',p);const sk=$('#msk');if(sk)sk.style.setProperty('--p',p);const a1=$('#mt1'),a2=$('#mt2');if(a1){a1.textContent=fm(P.time);a2.textContent=P.dur?fm(P.dur):'0:00'}pipSync()}
-function sync(){$('#app').classList.toggle('pl',P.playing);mini();np();tick();pipSync();if('mediaSession' in navigator)navigator.mediaSession.playbackState=P.playing?'playing':'paused'}
+let lastMk='';
+function sync(){$('#app').classList.toggle('pl',P.playing);mini();np();tick();pipSync();
+ if(window.ChaseXNative&&ChaseXNative.media){const t=TK(P.cur),mk=(t?t.id:'')+':'+!!P.playing;if(t&&mk!==lastMk){lastMk=mk;try{ChaseXNative.media(t.title,t.artist||'Chase X Records',!!P.playing)}catch(e){}}}
+if('mediaSession' in navigator)navigator.mediaSession.playbackState=P.playing?'playing':'paused'}
 function onCurChange(){bars()}
 
 /* ================= ACTIONS ================= */
@@ -314,7 +320,8 @@ document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.tar
  if(e.code==='Space'&&!/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)&&!e.target.closest('[role=button],[role=slider]')&&P.cur!=null&&$('#auth').classList.contains('gone')){e.preventDefault();toggle()}
  if(e.key==='Escape'){openNP(false);closeArtist()}
  if(e.target.id==='wv'&&/Arrow(Right|Left)/.test(e.key)&&P.dur)seekFrac(Math.max(0,Math.min(1,(P.time+(e.key==='ArrowRight'?5:-5))/P.dur)))});
-document.addEventListener('pointerdown',e=>{const k=e.target.closest&&e.target.closest('.msk');if(!k)return;const r=k.getBoundingClientRect(),f=ev=>seekFrac(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)));f(e);const up=()=>{removeEventListener('pointermove',f);removeEventListener('pointerup',up)};addEventListener('pointermove',f);addEventListener('pointerup',up)});
+document.addEventListener('pointerdown',e=>{const vk=e.target.closest&&e.target.closest('.vk');if(vk){const r=vk.getBoundingClientRect(),f=ev=>{P.vol=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));sv('cx-vol',P.vol);setVol();const v=$('#vol');if(v)v.style.setProperty('--p',P.vol)};f(e);const up=()=>{removeEventListener('pointermove',f);removeEventListener('pointerup',up)};addEventListener('pointermove',f);addEventListener('pointerup',up);return}
+ const k=e.target.closest&&e.target.closest('.msk');if(!k)return;const r=k.getBoundingClientRect(),f=ev=>seekFrac(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)));f(e);const up=()=>{removeEventListener('pointermove',f);removeEventListener('pointerup',up)};addEventListener('pointermove',f);addEventListener('pointerup',up)});
 $('#wv').addEventListener('pointerdown',e=>{const s=ev=>{const r=$('#wv').getBoundingClientRect();seekFrac(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)))};s(e);const up=()=>{removeEventListener('pointermove',s);removeEventListener('pointerup',up)};addEventListener('pointermove',s);addEventListener('pointerup',up)});
 document.addEventListener('ended',e=>{if(e.target.id==='lv'){const v=S.videos[vi];if(v&&lp<(v.parts||[]).length-1){lp++;vload=vi;watch()}}},true);
 
@@ -340,7 +347,7 @@ function authUI(){const m=mode;$('#at').textContent=m?'Create your account':'Wel
  if(m)p.oninput=()=>{const v=p.value,s=(v.length>=8)+(/[a-z]/.test(v)&&/[A-Z]/.test(v))+(/\d|[^A-Za-z0-9]/.test(v)&&v.length>=8),n=v?Math.max(1,s):0,e=$('#stm');e.dataset.s=n;e.lastChild.textContent=['Use 8+ characters','Weak','Okay','Strong'][n]}}
 function val(){const v=id=>($('#'+id)||{}).value||'',E={};if(mode&&v('nm').trim().length<2)E.nm='Enter your name.';if(!EMAIL.test(v('em')))E.em='Enter a valid email address.';if(v('pw').length<8)E.pw=mode?'Use at least 8 characters.':'Enter your password (8+ characters).';
  ['nm','em','pw'].forEach(id=>{const e=$('#'+id);if(!e)return;$('#w'+id).dataset.bad=!!E[id];$('#'+id+'e').textContent=E[id]||''});const f=Object.keys(E)[0];if(f)$('#'+f).focus();return !f}
-function enter(res){sv('cx-guest',0);token=res.token;user=res.user;sv('cx-token',token);sv('cx-user',user);const pend=after&&after.act;hideAuth();refreshMe().then(()=>{if(pend)setTimeout(pend,250)});toast('Welcome, '+user.name)}
+function enter(res){sv('cx-guest',0);token=res.token;user=res.user;sv('cx-token',token);sv('cx-user',user);const pend=after&&after.act;hideAuth();refreshMe().then(async()=>{if(pend)await pend();const gl=ld('cx-gl',[]);if(gl.length){sv('cx-gl',[]);let n=0;for(const id of gl){if(TK(id)&&!S.likes.has(+id)){try{await api(`/tracks/${id}/like`,{method:'POST',body:{}});S.likes=new Set([+id,...S.likes]);n++}catch(e){}}}if(n){sv('cx-liked',[...S.likes]);renderCur();toast(n+' liked song'+(n>1?'s':'')+' added to your account')}}});toast('Welcome, '+user.name)}
 function enterGuest(){sv('cx-guest',1);token=null;user=null;sv('cx-token',null);sv('cx-user',null);hideAuth()}
 function hideAuth(){$('#auth').classList.add('gone');$('#auth').inert=true;amsg='';const a=after;after=null;go(a&&a.tab&&R[a.tab]?a.tab:'home')}
 function showAuth(){mode=0;$('#auth').classList.remove('gone');$('#auth').inert=false;authUI();$$('.scr').forEach(s=>s.classList.remove('on'));renderGoogle();vsync()}
@@ -379,7 +386,8 @@ function sbar(){const l=$('#sbl'),u=$('#sbu');if(!l||!u)return;
 $('#tabs').innerHTML=`<div class="sbh"><span class="logo">${ic('disc')}</span><div><b>CHASE X</b><small>Records</small></div></div><div class="sbn">${TABS.map(t=>`<button class="tab" data-a="tab" data-t="${t[0]}">${ic(t[2])}<span>${t[1]}</span></button>`).join('')}</div><div class="sbl" id="sbl"></div><div class="sbu" id="sbu"></div>`;
 hprime();hprog();
 (async()=>{
-const cb=ld('cx-boot',null),apply=b=>Object.assign(S,{tracks:b.tracks,artists:b.artists,videos:b.videos,services:b.services,settings:b.settings});
+if(!token){const gl=ld('cx-liked',[]);if(gl.length){sv('cx-gl',gl);sv('cx-liked',[])}}
+ const cb=ld('cx-boot',null),apply=b=>Object.assign(S,{tracks:b.tracks,artists:b.artists,videos:b.videos,services:b.services,settings:b.settings});
  const fresh=Promise.all([api('/config'),api('/bootstrap')]);fresh.catch(()=>{});
  if(cb&&cb.b&&cb.b.tracks){apply(cb.b);GCID=cb.g||''}
  else{try{const [c,b]=await fresh;GCID=c.googleClientId||'';apply(b);sv('cx-boot',{g:GCID,b})}catch(e){toast('Cannot reach the server. Check your connection and try again.')}}

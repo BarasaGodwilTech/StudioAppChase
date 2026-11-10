@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 async function init() {
   await q(SCHEMA);
   await q('ALTER TABLE likes ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ DEFAULT now()');
+  await q('ALTER TABLE plays ADD COLUMN IF NOT EXISTS who TEXT');
+  await q('ALTER TABLE tracks ADD COLUMN IF NOT EXISTS bpm_source TEXT');
+  await q('ALTER TABLE tracks ADD COLUMN IF NOT EXISTS bpm_checked TIMESTAMPTZ');
+  await q('CREATE INDEX IF NOT EXISTS plays_who_idx ON plays(track_id, who, at)');
   await q("UPDATE videos SET subtitle='Chase X Records' WHERE subtitle='Chase X - 3 parts'");
   const { rows } = await q('SELECT count(*)::int AS n FROM tracks');
   if (rows[0].n === 0) await seed();
@@ -64,6 +68,7 @@ async function seed() {
   await sv('lesson', 'Music production', 'Learn to build beats and arrange songs', 0, 90, 2);
   await sv('lesson', 'Songwriting', 'Hooks, structure and lyrics', 0, 60, 3);
   const st = (k, v) => q('INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT DO NOTHING', [k, v]);
+  await st('workout_min_bpm', '100');
   await st('hero_title', 'Blessed'); await st('hero_sub', 'Chase X Records. Where sound meets vision.');
   await st('hero_track', String(blessed)); await st('contact_whatsapp', ''); await st('contact_email', '');
   await st('slots', '10:00,12:00,14:00,16:00,18:00,20:00'); await st('channel_url', 'https://www.youtube.com/@chasex1113');
