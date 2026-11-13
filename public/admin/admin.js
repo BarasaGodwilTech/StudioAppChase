@@ -8,7 +8,8 @@ function toast(m,t=''){const e=$('#toast');e.textContent=m;e.className='toast on
 async function api(p,o={}){const r=await fetch('/api'+p,{method:o.method||(o.body?'POST':'GET'),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:o.body?JSON.stringify(o.body):undefined});
  const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401&&token&&p!=='/auth/login'){localStorage.removeItem('cx-token');location.reload()}throw new Error(j.error||'Something went wrong.')}return j}
 function openModal(h,wide){$('#box').className='box'+(wide?' wide':'');$('#box').innerHTML=h;$('#modal').classList.add('on')}
-const closeModal=()=>$('#modal').classList.remove('on');
+let liveCtl=null;
+const closeModal=()=>{if(liveCtl){liveCtl.abort();liveCtl=null}$('#modal').classList.remove('on')};
 const ask=(t,m,ok='Delete')=>new Promise(res=>{openModal(`<h2>${t}</h2><p class="sub">${m}</p><div class="mf"><button class="btn" id="mn">Cancel</button><button class="btn danger" id="my">${ok}</button></div>`);$('#my').onclick=()=>{closeModal();res(true)};$('#mn').onclick=()=>{closeModal();res(false)}});
 function upload(file,onp){return new Promise((res,rej)=>{const x=new XMLHttpRequest();x.open('POST','/api/admin/upload?name='+encodeURIComponent(file.name));x.setRequestHeader('Authorization','Bearer '+token);
  x.upload.onprogress=e=>e.lengthComputable&&onp&&onp(e.loaded/e.total);x.onload=()=>{let j={};try{j=JSON.parse(x.responseText)}catch(e){}x.status<300?res(j.url):rej(new Error(j.error||'Upload failed.'))};x.onerror=()=>rej(new Error('Upload failed. Check the server is running.'));x.send(file)})}
@@ -61,11 +62,11 @@ async function tracks(){const [t,a]=await Promise.all([api('/admin/tracks'),api(
  const isW=x=>{const g=x.tags||[];if(g.includes('no-workout'))return false;return g.some(v=>/workout|gym|run/i.test(v))||x.bpm>=100};
  const F=[['all','All',t.length],['published','Live',t.filter(x=>x.status==='published').length],['draft','Drafts',t.filter(x=>x.status==='draft').length],['nolink','No link',t.filter(x=>!x.link).length],['workout','Workout',t.filter(isW).length]];
  const rows=t.filter(x=>sf==='all'||(sf==='nolink'?!x.link:sf==='workout'?isW(x):x.status===sf));
- $('#view').innerHTML=`<div class="bar"><div class="l">${F.map(f=>`<button class="chip ${sf===f[0]?'on':''}" data-f="${f[0]}">${f[1]} · ${f[2]}</button>`).join('')}</div><div class="l"><button class="btn" id="bpmall" title="Measure the BPM of songs that have none">${fi('gauge-high')} Detect BPMs</button><button class="btn" id="bulk">${fi('layer-group')} Add many</button><button class="btn pri" id="add">${fi('plus')} Add song</button></div></div>
+ $('#view').innerHTML=`<div class="bar"><div class="l">${F.map(f=>`<button class="chip ${sf===f[0]?'on':''}" data-f="${f[0]}">${f[1]} · ${f[2]}</button>`).join('')}</div><div class="l"><button class="btn" id="abtog" title="Keep a silent player running that measures songs that have no BPM, including new ones you add"></button><button class="btn" id="bpmall" title="Measure the BPM of songs that have none">${fi('gauge-high')} Detect BPMs</button><button class="btn" id="bulk">${fi('layer-group')} Add many</button><button class="btn pri" id="add">${fi('plus')} Add song</button></div></div>
  <div class="card tw"><table><thead><tr><th>Song</th><th>Link</th><th>BPM</th><th>Plays</th><th>Likes</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><div class="cell">${cov(x)}<div class="t"><b>${esc(x.title)}</b><span>${esc(x.artist||'No artist')}${x.genre?' · '+esc(x.genre):''}</span></div></div></td><td>${plat(x.platform)}</td><td>${x.bpm?x.bpm+(x.bpm_source&&x.bpm_source!=='manual'?' <small class="mut" title="Measured automatically ('+x.bpm_source+')">auto</small>':''):'-'}</td><td>${x.plays}</td><td>${x.likes}</td>
  <td><button class="pill ${x.status==='published'?'ok':''}" data-st="${x.id}" title="Click to switch" style="border:0;cursor:pointer">${x.status==='published'?'Live':'Draft'}</button></td>
  <td><div class="acts">${x.link?`<a class="btn sm" href="${esc(x.link)}" target="_blank" rel="noopener" title="Open link">${fi('arrow-up-right-from-square')}</a>`:''}<button class="btn sm" data-e="${x.id}">${fi('pen')}</button><button class="btn sm danger" data-d="${x.id}">${fi('trash')}</button></div></td></tr>`).join('')||`<tr><td colspan="7"><div class="empty">${fi('music')}No songs here yet. Paste a link to add your first one.</div></td></tr>`}</tbody></table></div>`;
- $$('[data-f]').forEach(b=>b.onclick=()=>{sf=b.dataset.f;tracks()});$('#add').onclick=()=>songModal();$('#bpmall').onclick=async()=>{try{const r=await api('/admin/bpm/missing',{method:'POST',body:{}});toast(r.queued?'Measuring '+r.queued+' song'+(r.queued>1?'s':'')+' in the background. Refresh in a minute.':'Every song already has a BPM.','ok')}catch(e){toast(e.message,'bad')}};
+ $$('[data-f]').forEach(b=>b.onclick=()=>{sf=b.dataset.f;tracks()});$('#add').onclick=()=>songModal();$('#bpmall').onclick=bpmCenter;$('#abtog').onclick=()=>autoBpm(!AB.on);syncAb();
  $('#bulk').onclick=()=>bulkModal();
  $$('[data-e]').forEach(b=>b.onclick=()=>songModal(t.find(x=>x.id==b.dataset.e)));
  $$('[data-st]').forEach(b=>b.onclick=async()=>{const x=t.find(y=>y.id==b.dataset.st);await api('/admin/tracks/'+x.id,{method:'PUT',body:{status:x.status==='published'?'draft':'published'}});toast(x.status==='published'?'Moved to drafts':'Song is live','ok');tracks()});
@@ -76,10 +77,10 @@ async function ensureArtist(selVal,newName,genre){if(selVal==='__new'){const n=(
 
 function songModal(row){const v=row?{...row}:{status:'published',palette:['#00d4ff','#a855f7','#ec4899'],tags:[]};let det=null;
  openModal(`<h2>${row?'Edit song':'Add a song'}</h2><p class="sub">Paste the link and the details are filled in for you. Check them, then save.</p>${dl()}
- <div class="fetch"><input id="lk" type="url" placeholder="Paste a YouTube, Spotify, SoundCloud, Apple Music or .mp3 link" value="${esc(v.link||'')}"><button class="btn pri" id="ft">${fi('wand-magic-sparkles')} Get details</button></div><div class="hint" id="lh"></div>
+ <div class="fetch"><input id="lk" type="url" placeholder="Paste a YouTube, Spotify, SoundCloud, Apple Music or .mp3 link" value="${esc(v.link||'')}"><button class="btn pri" id="ft">${fi('wand-magic-sparkles')} Get details</button></div><div class="hint" id="lh"></div><div class="cols" style="margin-top:8px;align-items:center"><button type="button" class="btn" id="aau">${fi('file-audio')} Upload audio file</button><small style="color:var(--mut,#8aa)">Optional. Upload an mp3 (up to 60 MB) to host it yourself: listeners can then save it for offline, and the BPM is measured for you.</small></div>
  <div class="prev"><div id="pv">${cov(v)}</div><div class="t" style="min-width:0"><b id="pt2" style="font-size:16px">${esc(v.title||'Song title')}</b><span id="pa2">${esc(v.artist||'Artist')}</span><div style="margin-top:8px" id="pp">${plat(v.platform||'none')}</div></div></div>
  <form id="sf"><div class="g2"><div class="f"><label>Title</label><input id="ti" required value="${esc(v.title||'')}"></div><div class="f"><label>Artist</label><select id="ar">${artistOpts(v.artist_id)}</select><input id="arn" class="hidden" style="margin-top:8px" placeholder="New artist name"></div></div>
- <div class="g2"><div class="f"><label>Genre</label><input id="ge" list="gl" value="${esc(v.genre||'')}" placeholder="Type or choose"></div><div class="f"><label>BPM</label><div class="cols"><input id="bp" type="number" min="40" max="260" value="${v.bpm||''}"><button type="button" class="btn" id="bd" title="Measure from the link">Detect</button><button type="button" class="btn" id="bf" title="Measure from an audio file on your computer">From file</button><button type="button" class="btn" id="bt" title="Tap along to the beat">Tap</button></div><small id="bh">Songs at 100 BPM or faster show on the Workout page by themselves. Leave it empty to measure it automatically.</small></div></div>
+ <div class="g2"><div class="f"><label>Genre</label><input id="ge" list="gl" value="${esc(v.genre||'')}" placeholder="Type or choose"></div><div class="f"><label>BPM</label><div class="cols"><input id="bp" type="number" min="40" max="260" value="${v.bpm||''}"><button type="button" class="btn" id="bd" title="Measure from the link">Detect</button><button type="button" class="btn" id="bf" title="Measure from an audio file on your computer">From file</button><button type="button" class="btn" id="bt" title="Tap along to the beat">Tap</button><button type="button" class="btn" id="bl" title="Play the YouTube, SoundCloud or Spotify link and measure it by listening">Listen</button></div><div id="lv" style="margin-top:8px"></div><small id="bh">Songs at 100 BPM or faster show on the Workout page by themselves. Leave it empty to measure it automatically.</small></div></div>
  <div class="f"><label>Artwork</label><div class="cols"><input id="aw" type="url" placeholder="Image link, or upload one" value="${esc(v.artwork||'')}"><button type="button" class="btn" id="au">${fi('upload')} Upload</button></div></div>
  <div class="g2"><div class="f"><label>Length (seconds)</label><input id="du" type="number" min="0" value="${v.duration||''}"><small id="dh">Optional. The player learns the real length when it plays.</small></div><div class="f"><label>Release date</label><input id="rd" type="date" value="${esc(String(v.release_date||'').slice(0,10))}"></div></div>
  <div class="f"><label>Tags</label><input id="tg" value="${esc((v.tags||[]).join(', '))}" placeholder="workout, new, gospel"><small>Add <b>workout</b> to always show it on the Workout page, or <b>no-workout</b> to keep it off.</small></div>
@@ -104,18 +105,27 @@ function songModal(row){const v=row?{...row}:{status:'published',palette:['#00d4
  $('#du').oninput=()=>$('#dh').textContent=$('#du').value?'= '+fm($('#du').value)+' minutes':'Optional.';
  $('#au').onclick=async()=>{const [f]=await pick('image/*');if(!f)return;$('#au').disabled=true;try{$('#aw').value=await upload(f);live();toast('Artwork uploaded','ok')}catch(e){toast(e.message,'bad')}$('#au').disabled=false};
 /* BPM helpers: detect from the link, measure an audio file, or tap along */
- let bpmSrc=v.bpm_source||(v.bpm?'manual':null),taps=[];const bh=(m,c)=>{const h=$('#bh');h.className=c||'';h.innerHTML=m};
+ let bpmSrc=v.bpm_source||(v.bpm?'manual':null),taps=[];const bh=(m,c)=>{const h=$('#bh');if(!h)return;h.className=c||'';h.innerHTML=m};
  $('#bp').oninput=()=>{bpmSrc='manual'};
- const gotBpm=r=>{if(r.bpm){$('#bp').value=r.bpm;bpmSrc=r.source;bh(fi('circle-check')+' '+r.bpm+' BPM '+({audio:'measured from the audio file',file:'measured from the file',deezer:'found in the Deezer database'}[r.source]||'')+(r.confidence==='low'?'. Not sure about this one, please check it.':'.'),'ok')}else bh(fi('triangle-exclamation')+' Could not measure it. '+esc((r.notes||[]).join(' '))+' Try From file or Tap.','err')};
+ const gotBpm=r=>{if(r.bpm){$('#bp').value=r.bpm;bpmSrc=r.source;bh(fi('circle-check')+' '+r.bpm+' BPM '+({audio:'measured from the audio file',file:'measured from the file',deezer:'found in the Deezer database',listen:'measured by listening to the song'}[r.source]||'')+(r.confidence==='low'?'. Not sure about this one, please check it.':'.'),'ok')}else bh(fi('triangle-exclamation')+' Could not measure it. '+esc((r.notes||[]).join(' '))+' Try From file or Tap.','err')};
  $('#bd').onclick=async()=>{const b=$('#bd');b.disabled=true;bh(fi('circle-notch fa-spin')+' Measuring...');try{const sel=$('#ar');gotBpm(await api('/admin/bpm/link',{body:{link:$('#lk').value.trim(),artist:sel.value==='__new'?$('#arn').value:(sel.selectedOptions[0]?.text||'').replace('No artist',''),title:$('#ti').value.trim()}}))}catch(e){bh(esc(e.message),'err')}b.disabled=false};
  $('#bf').onclick=async()=>{const [f]=await pick('audio/*,.mp3,.wav,.m4a,.ogg,.flac');if(!f)return;const b=$('#bf');b.disabled=true;bh(fi('circle-notch fa-spin')+' Measuring '+esc(f.name)+'...');try{const r=await fetch('/api/admin/bpm/file',{method:'POST',headers:{'Content-Type':'application/octet-stream',Authorization:'Bearer '+token},body:f});const j=await r.json();if(!r.ok)throw new Error(j.error||'Could not measure that file.');gotBpm(j)}catch(e){bh(esc(e.message),'err')}b.disabled=false};
+ $('#aau').onclick=async()=>{const [f]=await pick('audio/*,.mp3,.m4a,.aac,.wav,.ogg,.flac');if(!f)return;const b=$('#aau');b.disabled=true;try{$('#lh').innerHTML=fi('circle-notch fa-spin')+' Uploading '+esc(f.name)+'...';const url=await upload(f,p=>{const h=$('#lh');if(h)h.innerHTML=fi('circle-notch fa-spin')+' Uploading '+Math.round(p*100)+'%'});$('#lk').value=url;$('#lh').innerHTML=fi('circle-check')+' Uploaded. Save the song and its BPM is measured automatically.';if(!$('#bp').value)bh('The BPM will be measured after you save.')}catch(e){$('#lh').textContent=e.message}b.disabled=false};
+ $('#bl').onclick=async()=>{const link=$('#lk').value.trim();
+  if(!BpmLive.embedFor(link)){bh(fi('triangle-exclamation')+' Listening works with YouTube, SoundCloud and Spotify links. Paste one in the link box first.','err');return}
+  if(!BpmLive.supported()){bh(fi('triangle-exclamation')+' Listening needs desktop Chrome or Edge. Use Tap or From file instead.','err');return}
+  const b=$('#bl');b.disabled=true;bh(fi('circle-notch fa-spin')+' In the box that appears, choose <b>This tab</b> and tick <b>Also share tab audio</b>.');
+  liveCtl=new AbortController();let cap;
+  try{cap=await BpmLive.startCapture();const r=await BpmLive.measureLink(cap,link,{host:$('#lv'),signal:liveCtl.signal,onProgress:p=>bh(fi('headphones')+' Listening... '+Math.min(48,Math.round(p.heard))+' of 48 seconds of music'+(p.heard<1&&p.waited>6?'. Press play in the player if it did not start.':''))});gotBpm({bpm:r.bpm,source:'listen',confidence:r.confidence})}
+  catch(e){bh(esc(e.message),'err')}
+  finally{BpmLive.stopCapture(cap);const v=$('#lv');if(v)v.innerHTML='';const bb=$('#bl');if(bb)bb.disabled=false}};
  $('#bt').onclick=()=>{const n=performance.now();if(taps.length&&n-taps[taps.length-1]>2500)taps=[];taps.push(n);if(taps.length<4){bh('Keep tapping to the beat ('+taps.length+'/4)');return}const iv=[];for(let i=1;i<taps.length;i++)iv.push(taps[i]-taps[i-1]);iv.sort((a,b)=>a-b);$('#bp').value=Math.round(60000/iv[Math.floor(iv.length/2)]);bpmSrc='tap';bh(fi('hand-pointer')+' '+$('#bp').value+' BPM from your taps. Keep going to refine it.','ok')};
  $('#cn').onclick=closeModal;if(row&&row.artist_id)showNew();
  $('#sf').onsubmit=async e=>{e.preventDefault();const b=$('#sv');b.disabled=true;
   try{const aid=await ensureArtist($('#ar').value,$('#arn').value,$('#ge').value);
    const body={title:$('#ti').value.trim(),artist_id:aid,genre:$('#ge').value.trim()||null,link:$('#lk').value.trim()||null,artwork:$('#aw').value.trim()||null,bpm:$('#bp').value?+$('#bp').value:null,bpm_source:$('#bp').value?(bpmSrc||'manual'):null,duration:$('#du').value?+$('#du').value:0,
     tags:$('#tg').value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean),palette:[$('#c0').value,$('#c1').value,$('#c2').value],featured:$('#fe').checked,status:$('#st').value};if($('#rd').value)body.release_date=$('#rd').value;
-   await api(row?'/admin/tracks/'+row.id:'/admin/tracks',{method:row?'PUT':'POST',body});closeModal();toast('Song saved','ok');go('tracks')}catch(err){toast(err.message,'bad');b.disabled=false}}}
+   await api(row?'/admin/tracks/'+row.id:'/admin/tracks',{method:row?'PUT':'POST',body});closeModal();toast('Song saved','ok');go('tracks');if(window.autoBpmKick)autoBpmKick()}catch(err){toast(err.message,'bad');b.disabled=false}}}
 
 /* ---------- bulk add ---------- */
 function bulkModal(){const items=[];
@@ -255,3 +265,99 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
 $('#modal').addEventListener('mousedown',e=>{if(e.target.id==='modal')closeModal()});
 (async()=>{try{GCID=(await api('/config')).googleClientId||''}catch(e){}
  if(!token)return login();try{const r=await api('/me');if(r.user.role!=='admin')return login('Sign in with an admin account.');me=r.user;shell();go('dashboard');api('/admin/bookings').then(b=>badge(b.filter(x=>x.status==='pending').length)).catch(()=>{})}catch(e){login()}})();
+
+
+/* ================= Detect BPMs: shows what happened, and lets you finish the rest by listening ================= */
+const PLN={youtube:'YouTube',spotify:'Spotify',soundcloud:'SoundCloud',apple:'Apple Music',audiomack:'Audiomack',audio:'an audio file',none:'no link'};
+async function bpmCenter(){
+ openModal(`<h2>${fi('gauge-high')} Detect BPMs</h2><p class="sub" id="bsub">Checking your songs...</p><div id="bres"></div><div class="mf"><button class="btn" id="bcl">Close</button></div>`,true);
+ $('#bcl').onclick=()=>{closeModal();go('tracks')};const t0=Date.now();
+ let q;try{q=await api('/admin/bpm/missing',{method:'POST',body:{}})}catch(e){$('#bsub').textContent=e.message;return}
+ if(q.queued){
+  $('#bsub').innerHTML=fi('circle-notch fa-spin')+` Measuring ${q.queued} song${q.queued>1?'s':''}. Songs that link to an audio file are measured directly; the others are looked up in the Deezer database.`;
+  for(let i=0;i<150;i++){await new Promise(r=>setTimeout(r,1500));if(!$('#bres'))return;let st;try{st=await api('/admin/bpm/status')}catch(e){break}if(st.pending===0)break}
+ }
+ if(!$('#bres'))return;
+ let st={log:[]};try{st=await api('/admin/bpm/status')}catch(e){}
+ const got=(st.log||[]).filter(l=>l.at>=t0-2000&&l.bpm),notes={};(st.log||[]).filter(l=>l.at>=t0-2000&&!l.bpm).forEach(l=>notes[l.id]=l.notes||[]);
+ const all=await api('/admin/tracks'),left=all.filter(t=>!t.bpm&&t.link);
+ const why=t=>{const n=(notes[t.id]||[]).filter(x=>!/Deezer/.test(x)).join(' ');return t.platform==='audio'?(n||'Could not read the audio file.'):`It streams from ${PLN[t.platform]||'a link'}, which does not share its audio, so it cannot be measured from the link.`};
+ const canListen=left.filter(t=>BpmLive.embedFor(t.link));
+ $('#bsub').innerHTML=got.length||left.length?`${got.length?fi('circle-check')+` <b>${got.length}</b> measured. `:''}${left.length?`<b>${left.length}</b> still need${left.length>1?'':'s'} a BPM.`:'Every song now has a BPM.'}`:'Every song already has a BPM.';
+ $('#bres').innerHTML=(got.length?`<h3 style="margin:14px 0 6px">Measured</h3>${got.map(l=>`<div class="row" style="justify-content:space-between;padding:6px 0"><span>${esc(l.title)}</span><b>${l.bpm} BPM <small class="mut">${l.source==='deezer'?'from Deezer':'from the audio'}</small></b></div>`).join('')}`:'')
+  +(left.length?`<h3 style="margin:16px 0 6px">Still without a BPM</h3><div id="lvl">${left.map(t=>`<div class="row" style="justify-content:space-between;gap:12px;padding:6px 0" data-t="${t.id}"><span><b>${esc(t.title)}</b><br><small class="mut">${esc(why(t))}</small></span><span class="mut" data-s="${t.id}"></span></div>`).join('')}</div>
+   ${canListen.length&&BpmLive.supported()?`<p class="sub" style="margin-top:12px">${canListen.length} of these can be measured by <b>listening</b>: the songs play here one after another and the tempo is worked out from the sound. Nothing is recorded or saved. Your browser will ask to share this tab: choose <b>This tab</b> and tick <b>Also share tab audio</b>. It takes about a minute per song, so leave this window open.</p><button class="btn pri" id="blis">${fi('headphones')} Measure ${canListen.length} song${canListen.length>1?'s':''} by listening</button>`:`<p class="sub" style="margin-top:12px">${canListen.length?'Listening needs desktop Chrome or Edge. ':''}You can also open a song and use <b>Tap</b> (tap along to the beat) or <b>From file</b> (pick your own copy of the song).</p>`}`:'');
+ if($('#blis'))$('#blis').onclick=()=>listenBatch(canListen);
+}
+async function listenBatch(list){
+ const box=$('#bres');box.insertAdjacentHTML('afterbegin',`<div id="lvp" style="margin-bottom:8px"></div><div class="hint" id="lvs"></div>`);
+ const b=$('#blis');if(b)b.replaceWith(Object.assign(document.createElement('button'),{className:'btn',id:'lvstop',textContent:'Stop'}));
+ const ctl=liveCtl=new AbortController();$('#lvstop').onclick=()=>ctl.abort();
+ let cap;try{cap=await BpmLive.startCapture()}catch(e){$('#lvs').className='hint err';$('#lvs').textContent=e.message;return}
+ let done=0;
+ for(const t of list){
+  if(ctl.signal.aborted||!$('#lvs'))break;
+  const mark=(h)=>{const c=$(`[data-s="${t.id}"]`);if(c)c.innerHTML=h};
+  mark(fi('circle-notch fa-spin'));
+  try{
+   const r=await BpmLive.measureLink(cap,t.link,{host:$('#lvp'),signal:ctl.signal,onProgress:p=>{const e=$('#lvs');if(e)e.innerHTML=`${fi('headphones')} <b>${esc(t.title)}</b>: ${Math.min(48,Math.round(p.heard))} of 48 seconds heard (${done+1} of ${list.length})`+(p.heard<1&&p.waited>6?'. Press play in the player if it did not start.':'')}});
+   await api('/admin/tracks/'+t.id,{method:'PUT',body:{bpm:r.bpm,bpm_source:'listen'}});done++;mark(`<b style="color:var(--ok,#3bff8a)">${r.bpm} BPM</b>`);
+  }catch(e){if(ctl.signal.aborted)break;mark(`<small style="color:var(--bad,#ff6b6b)">${esc(e.message)}</small>`)}
+ }
+ BpmLive.stopCapture(cap);const lp=$('#lvp');if(lp)lp.innerHTML='';
+ const e=$('#lvs');if(e){e.className='hint ok';e.innerHTML=`${fi('circle-check')} Done. ${done} of ${list.length} measured. Reload the song list to see the new BPMs. Check them by ear: if a YouTube video starts with an advert or a long intro, the reading can be off.`}
+ const st=$('#lvstop');if(st)st.remove();
+}
+
+
+/* ================= Background listening =================
+   A hidden, silent player measures every YouTube / SoundCloud / Spotify song that has no BPM, one after another, and keeps
+   watching for new songs. The browser asks once (per visit) to share this tab's sound; after that it runs by itself while this
+   admin page stays open (it can be minimised or in another window). */
+const AB={on:false,cap:null,ctl:null,busy:false,wake:null,fail:(()=>{try{return JSON.parse(localStorage.getItem('cx-bpmfail')||'{}')}catch(e){return{}}})()};
+const abWait=ms=>new Promise(r=>{const t=setTimeout(r,ms);AB.wake=()=>{clearTimeout(t);r()}});
+window.autoBpmKick=()=>{if(AB.wake)AB.wake()};
+function abChip(html){
+ let c=$('#abchip');
+ if(!c){c=document.createElement('div');c.id='abchip';c.style.cssText='position:fixed;left:16px;bottom:16px;z-index:60;background:#101a14;color:#e9f3ec;border:1px solid #2a3b30;border-radius:14px;padding:10px 14px;font-size:13px;max-width:340px;box-shadow:0 8px 30px #0009;display:flex;gap:10px;align-items:center';
+  c.innerHTML='<span id="abt" style="flex:1"></span><button class="btn sm" id="abx"></button><div id="abh" style="position:fixed;left:-9999px;top:0;width:320px;height:220px;overflow:hidden"></div>';document.body.appendChild(c)}
+ $('#abt').innerHTML=html;
+ const x=$('#abx');x.textContent=AB.on?'Stop':'Resume';x.onclick=()=>autoBpm(!AB.on);
+}
+function abGone(){const c=$('#abchip');if(c)c.remove()}
+function syncAb(){
+ const b=$('#abtog');if(b){b.className='btn'+(AB.on?' pri':'');b.innerHTML=`${fi('headphones')} Background listening: ${AB.on?'On':'Off'}`}
+ if(!AB.on&&localStorage.getItem('cx-autobpm')==='1')abChip('Background BPM listening was on. Resume it?');
+}
+async function autoBpm(on){
+ if(on&&!AB.on){
+  if(!BpmLive.supported()){toast('Background listening needs desktop Chrome or Edge.','bad');return}
+  try{AB.cap=await BpmLive.startCapture({silent:true})}catch(e){toast(e.message,'bad');return}
+  AB.on=true;AB.ctl=new AbortController();localStorage.setItem('cx-autobpm','1');syncAb();abChip('Starting...');abLoop();
+ }else if(!on){
+  AB.on=false;localStorage.removeItem('cx-autobpm');if(AB.ctl)AB.ctl.abort();if(AB.wake)AB.wake();BpmLive.stopCapture(AB.cap);AB.cap=null;abGone();syncAb();
+ }
+}
+async function abLoop(){
+ if(AB.busy)return;AB.busy=true;
+ try{
+  while(AB.on){
+   if(AB.cap&&AB.cap.ended){AB.on=false;BpmLive.stopCapture(AB.cap);AB.cap=null;toast('Sharing stopped, so background listening is off.','bad');abGone();syncAb();break}
+   let todo=[];
+   try{todo=(await api('/admin/tracks')).filter(t=>!t.bpm&&t.link&&BpmLive.embedFor(t.link)&&!(AB.fail[t.id]>Date.now()-864e5))}catch(e){}
+   if(!todo.length){abChip(`${fi('headphones')} Listening for new songs to measure. Leave this page open.`);await abWait(45000);continue}
+   for(const t of todo){
+    if(!AB.on)break;
+    try{
+     const r=await BpmLive.measureLink(AB.cap,t.link,{host:$('#abh'),signal:AB.ctl.signal,onProgress:p=>abChip(`${fi('headphones')} Measuring <b>${esc(t.title)}</b>: ${Math.round(p.heard)} of ${Math.round(p.seconds)} s (${todo.indexOf(t)+1} of ${todo.length})`)});
+     await api('/admin/tracks/'+t.id,{method:'PUT',body:{bpm:r.bpm,bpm_source:'listen'}});
+     toast(`${t.title}: ${r.bpm} BPM`,'ok');if(view==='tracks'&&!$('#modal').classList.contains('on'))go('tracks');
+    }catch(e){
+     if(!AB.on)break;
+     AB.fail[t.id]=Date.now();localStorage.setItem('cx-bpmfail',JSON.stringify(AB.fail));
+     toast(`Could not measure "${t.title}": ${e.message}`,'bad');
+    }
+   }
+  }
+ }finally{AB.busy=false}
+}

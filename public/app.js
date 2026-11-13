@@ -3,8 +3,8 @@
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}},ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S={tracks:[],artists:[],videos:[],services:[],settings:{},likes:new Set(ld('cx-token',null)?ld('cx-liked',[]):[]),bookings:[]};
-let token=ld('cx-token',null),user=ld('cx-user',null),prefs=Object.assign({ap:1,a:1},ld('cx-prefs',{}));
+const S={tracks:[],artists:[],videos:[],services:[],settings:{},likes:new Set(ld('cx-token',null)?ld('cx-liked',[]):[]),bookings:[],playlists:[]};
+let token=ld('cx-token',null),user=ld('cx-user',null),prefs=Object.assign({ap:1,a:1,oc:1},ld('cx-prefs',{}));
 let curTab=null,xseg=0,bseg=0,filter='All',q='',wf=0,vi=0,vload=-1,lp=0,plays=0;
 let svc=-1,day=0,slot=-1,taken=[],bsent=false,bbusy=false,bf=Object.assign({name:'',phone:'',notes:''},{});
 const PL={youtube:'YouTube',spotify:'Spotify',soundcloud:'SoundCloud',audio:'the web',audiomack:'Audiomack',apple:'Apple Music',boomplay:'Boomplay',external:'the web',none:''};
@@ -14,7 +14,7 @@ const SPIN='<span class="btn ld" style="width:30px;height:30px;background:none;b
 const TABS=[['home','Home','home'],['explore','Explore','search'],['watch','Watch','tv'],['book','Book','cal'],['you','You','user']];
 const ic=(n,c='')=>`<svg class="ic ${c}"><use href="#i-${n}"/></svg>`;
 const fm=s=>{s=Math.max(0,s||0);return Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0')};
-const TK=id=>S.tracks.find(t=>t.id===+id),AR=id=>S.artists.find(a=>a.id===+id);
+const TK=id=>S.tracks.find(t=>t.id===+id)||(P.ghost&&P.ghost.id===+id?P.ghost:null),AR=id=>S.artists.find(a=>a.id===+id);
 const pal=o=>o&&o.palette&&o.palette.length>=3?o.palette:['#3BFF8A','#0A6B42','#FFB224'];
 const sty=o=>{const p=pal(o);return `--a:${p[0]};--b:${p[1]};--c:${p[2]}`};
 const art=(o,c='',img)=>{const u=img||o.artwork||o.image;return `<div class="art ${c}" style="${sty(o)}">${u?`<img src="${esc(u)}" alt="" loading="lazy" onerror="this.remove()">`:''}</div>`};
@@ -24,10 +24,64 @@ const pad=n=>String(n).padStart(2,'0'),iso=d=>d.getFullYear()+'-'+pad(d.getMonth
 const RM=matchMedia('(prefers-reduced-motion:reduce)').matches;
 function toast(m){const e=$('#toast');e.textContent=m;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3200)}
 async function api(path,o={}){const r=await fetch('/api'+path,{method:o.method||(o.body?'POST':'GET'),headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:o.body?JSON.stringify(o.body):undefined});
- const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401&&token&&path==='/me')signOut(true);throw new Error(j.error||'Something went wrong.')}return j}
+ const j=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401&&token&&!path.startsWith('/auth')){signOut(true);toast('Please sign in again.')}throw new Error(j.error||'Something went wrong.')}return j}
+
+/* ================= DATA: valid and fresh ================= */
+const arr=v=>Array.isArray(v)?v:[],n0=v=>Number.isFinite(+v)?+v:0;
+function norm(b){b=b||{};
+ return{tracks:arr(b.tracks).filter(t=>t&&t.id!=null).map(t=>({...t,id:+t.id,title:String(t.title||'Untitled'),artist:t.artist||'',tags:arr(t.tags).map(String),palette:arr(t.palette),plays:n0(t.plays),likes:n0(t.likes),bpm:+t.bpm>0?+t.bpm:null,duration:n0(t.duration),link:t.link||'',platform:t.platform||'none'})),
+  artists:arr(b.artists).filter(a=>a&&a.id!=null).map(a=>({...a,id:+a.id,name:String(a.name||''),palette:arr(a.palette)})),
+  videos:arr(b.videos).filter(v=>v&&v.id!=null),services:arr(b.services).filter(x=>x&&x.id!=null),
+  settings:b.settings&&typeof b.settings==='object'?b.settings:{}}}
+const sigOf=()=>JSON.stringify([S.tracks,S.artists,S.videos,S.services,S.settings]);
+const typing=()=>{const a=document.activeElement;return a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)};
+const safeRender=()=>{if(!typing())renderCur()};
+let refreshing=false,needReload=false;
+/* Checks the server for changes the admin made. The browser sends a tiny "has it changed?" request and the server answers 304 when nothing is new. */
+async function refreshData(){if(refreshing||!navigator.onLine)return;refreshing=true;
+ try{const b=await api('/bootstrap'),before=sigOf();if(P.cur!=null){const o=TK(P.cur);if(o)P.ghost=o}
+  Object.assign(S,norm(b));if(sigOf()===before)return;sv('cx-boot',{g:GCID,b});
+  const ids=new Set(S.tracks.map(t=>t.id));recent=recent.filter(i=>ids.has(i));sv('cx-recent',recent);S.likes=new Set([...S.likes].filter(i=>ids.has(i)));
+  P.q=P.q.filter(i=>ids.has(i)||i===P.cur);bars();safeRender();sync()}
+ catch(e){}finally{refreshing=false}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshData();if(token)refreshMe()}});
+addEventListener('online',()=>{offBanner();refreshData();refreshMe()});addEventListener('offline',offBanner);
+setInterval(()=>{if(!document.hidden){refreshData()}},60000);
+setInterval(()=>{if(!document.hidden&&token)refreshMe()},120000);
+
+/* ================= OFFLINE: songs kept on this device =================
+   Only songs that are audio files can be kept (YouTube, Spotify and SoundCloud do not allow it).
+   Songs you play are kept automatically (up to 40 songs / 300 MB); songs you save on purpose are never removed automatically. */
+let offT;const uiOff=()=>{clearTimeout(offT);offT=setTimeout(()=>{safeRender();np()},150)};
+function offBanner(){const a=$('#app');if(a)a.classList.toggle('off',!navigator.onLine)}
+const OFF={meta:ld('cx-off',{}),busy:new Set(),urls:new Map(),
+ ok:()=>'caches' in window,
+ can:t=>!!t&&t.platform==='audio'&&!!t.link,
+ has:id=>!!OFF.meta[id],
+ key:id=>'/__offline/'+id,
+ persist:()=>sv('cx-off',OFF.meta),
+ size:()=>Object.values(OFF.meta).reduce((n,m)=>n+(m.s||0),0),
+ async url(t){if(!OFF.has(t.id)||!OFF.ok())return null;const u=OFF.urls.get(t.id);if(u)return u;
+  try{const r=await(await caches.open('cx-audio')).match(OFF.key(t.id));if(!r){delete OFF.meta[t.id];OFF.persist();return null}
+   const url=URL.createObjectURL(await r.blob());OFF.urls.set(t.id,url);
+   while(OFF.urls.size>6){const k=OFF.urls.keys().next().value;URL.revokeObjectURL(OFF.urls.get(k));OFF.urls.delete(k)}return url}catch(e){return null}},
+ async save(t,keep){if(!OFF.ok()||!OFF.can(t)||OFF.busy.has(t.id))return false;OFF.busy.add(t.id);uiOff();
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+   const r=await fetch(ref(t),{cache:'no-store'});if(!r.ok||/text\/html/.test(r.headers.get('content-type')||''))throw 0;
+   const blob=await r.blob();if(!blob.size)throw 0;
+   await(await caches.open('cx-audio')).put(OFF.key(t.id),new Response(blob,{headers:{'Content-Type':blob.type||'audio/mpeg'}}));
+   const old=OFF.meta[t.id];OFF.meta[t.id]={s:blob.size,at:Date.now(),k:keep?1:(old&&old.k)||0};OFF.persist();await OFF.prune();return true}
+  catch(e){return false}finally{OFF.busy.delete(t.id);uiOff()}},
+ async remove(id){try{await(await caches.open('cx-audio')).delete(OFF.key(id))}catch(e){}const u=OFF.urls.get(id);if(u){URL.revokeObjectURL(u);OFF.urls.delete(id)}delete OFF.meta[id];OFF.persist();uiOff()},
+ async prune(){const auto=Object.entries(OFF.meta).filter(([,m])=>!m.k).sort((a,b)=>a[1].at-b[1].at);let bytes=auto.reduce((n,[,m])=>n+m.s,0);
+  while(auto.length&&(auto.length>40||bytes>300*1048576)){const [id,m]=auto.shift();bytes-=m.s;await OFF.remove(id)}},
+ async saveMany(list,keep){let ok=0,fail=0;for(const t of list){if(OFF.has(t.id)&&OFF.meta[t.id].k){ok++;continue}(await OFF.save(t,keep))?ok++:fail++}
+  toast(fail?`Saved ${ok}. ${fail} could not be saved (the file host may not allow it).`:`Saved ${ok} song${ok===1?'':'s'} for offline.`)}};
+function autoSave(){P.autoSaved=true;const t=TK(P.cur);
+ if(t&&prefs.oc&&OFF.can(t)&&!OFF.has(t.id)&&navigator.onLine&&!(navigator.connection&&navigator.connection.saveData))OFF.save(t,false)}
 
 /* ================= PLAYER ENGINE ================= */
-const P={q:[],cur:null,playing:false,loading:false,time:0,dur:0,shuf:false,rep:false,listened:0,lt:0,counted:false,ended:false,nx:null,warmed:false,vol:+ld('cx-vol',1)};
+const P={q:[],cur:null,playing:false,loading:false,time:0,dur:0,shuf:false,rep:false,listened:0,lt:0,counted:false,ended:false,nx:null,warmed:false,vol:+ld('cx-vol',1),ghost:null,prog:0,lastT:0,stall:0,autoSaved:false,curRef:''};
 let ACT=null;const D={};
 const st=(n,v)=>ACT===n&&onState(v),tm=(n,t,d)=>ACT===n&&onTime(t,d),en=n=>ACT===n&&onEnd(),er=n=>ACT===n&&onErr();
 const need=(src,test)=>new Promise((res,rej)=>{if(test())return res();if(!document.querySelector(`script[data-s="${src}"]`)){const s=document.createElement('script');s.src=src;s.dataset.s=src;s.onerror=()=>rej(new Error('blocked'));document.head.appendChild(s)}
@@ -38,7 +92,7 @@ const host=(html)=>$('#eng').insertAdjacentHTML('beforeend',`<div class="hostyt"
 D.youtube={vol(v){this.ps.forEach(p=>{try{p&&p.setVolume&&p.setVolume(v*100)}catch(e){}})},ps:[null,null],ok:[0,0],rd:[null,null],cued:['',''],i:0,iv:null,get p(){return this.ps[this.i]},
  mk(slot,id){const me=this;const pr=new Promise(res=>{const el='ytp'+slot;host(`<div id="${el}"></div>`);
   const pl=new YT.Player(el,{width:200,height:200,videoId:id||undefined,playerVars:{playsinline:1,controls:0,rel:0,origin:location.origin},
-   events:{onReady:()=>{me.ok[slot]=1;res(pl)},onStateChange:e=>{if(me.ps[me.i]!==pl)return;e.data===1?st('youtube',true):e.data===2?st('youtube',false):e.data===0&&en('youtube')},onError:()=>{if(me.ps[me.i]===pl)er('youtube')}}});
+   events:{onReady:()=>{me.ok[slot]=1;res(pl)},onStateChange:e=>{if(me.ps[me.i]!==pl)return;if(e.data===3){P.loading=true;sync();return}e.data===1?st('youtube',true):e.data===2?st('youtube',false):e.data===0&&en('youtube')},onError:()=>{if(me.ps[me.i]===pl)er('youtube')}}});
   me.ps[slot]=pl});me.rd[slot]=pr;return pr},
  async load(t,id){await need('https://www.youtube.com/iframe_api',()=>window.YT&&YT.Player);const o=1-this.i;
   if(!this.ps[this.i]){this.cued[this.i]=id;await this.mk(this.i,id);this.p.playVideo()}
@@ -61,14 +115,18 @@ D.soundcloud={vol(v){try{this.w&&this.w.setVolume(v*100)}catch(e){}},w:null,d:0,
  else this.w.load(url,{auto_play:true,hide_related:true,visual:false,callback:gd})},
  play(){this.w&&this.w.play()},pause(){this.w&&this.w.pause()},seek(s){this.w&&this.w.seekTo(s*1000)},stop(){this.w&&this.w.pause()}};
 
-D.spotify={c:null,async load(t,uri){await need('https://open.spotify.com/embed/iframe-api/v1',()=>window.__sp);
- if(!this.c){host('<div id="spp"></div>');await new Promise(res=>window.__sp.createController($('#spp'),{uri,width:200,height:200},c=>{this.c=c;
-  c.addListener('ready',()=>c.play());c.addListener('playback_update',e=>{const d=e.data;st('spotify',!d.isPaused);tm('spotify',d.position/1000,d.duration/1000);if(d.duration&&d.isPaused&&d.position>=d.duration-400)en('spotify')});res()}))}
- else{this.c.loadUri(uri);this.c.play()}},
- play(){this.c&&this.c.resume?this.c.resume():this.c&&this.c.play()},pause(){this.c&&this.c.pause()},seek(s){this.c&&this.c.seek(s)},stop(){try{this.c.pause()}catch(e){}}};
+D.spotify={c:null,max:0,hold:0,
+ async load(t,uri){this.max=0;this.hold=0;await need('https://open.spotify.com/embed/iframe-api/v1',()=>window.__sp);
+  if(!this.c){host('<div id="spp"></div>');await new Promise(res=>window.__sp.createController($('#spp'),{uri,width:200,height:200},c=>{this.c=c;c.addListener('ready',()=>c.play());c.addListener('playback_update',e=>this.upd(e.data));res()}))}
+  else{this.c.loadUri(uri);this.c.play()}},
+ upd(d){if(!d)return;const pos=(d.position||0)/1000,dur=(d.duration||0)/1000;
+  st('spotify',!d.isPaused);tm('spotify',pos,dur);if(!d.isPaused)this.max=Math.max(this.max,pos);
+  /* Finished: it stopped at the end, or (30 second previews) it stopped and jumped back to the start after playing for a while. */
+  if(d.isPaused&&dur&&!this.hold&&(pos>=dur-.4||(pos<1.5&&this.max>=Math.min(dur-2.5,25))))en('spotify')},
+ play(){this.hold=0;this.c&&this.c.resume?this.c.resume():this.c&&this.c.play()},pause(){this.hold=1;this.c&&this.c.pause()},seek(s){this.max=0;this.c&&this.c.seek(s)},stop(){this.hold=1;try{this.c.pause()}catch(e){}}};
 
 D.audio={vol(v){this.els.forEach(e=>e.volume=v)},els:[new Audio(),new Audio()],i:0,pre:'',init:0,get a(){return this.els[this.i]},
- bind(){if(this.init)return;this.init=1;this.els.forEach(el=>{const on=(ev,f)=>el.addEventListener(ev,()=>{if(el===this.a)f()});on('play',()=>st('audio',true));on('pause',()=>st('audio',false));on('ended',()=>en('audio'));on('error',()=>er('audio'));on('timeupdate',()=>tm('audio',el.currentTime,el.duration||0))})},
+ bind(){if(this.init)return;this.init=1;this.els.forEach(el=>{const on=(ev,f)=>el.addEventListener(ev,()=>{if(el===this.a)f()});on('play',()=>st('audio',true));on('pause',()=>st('audio',false));on('ended',()=>en('audio'));on('error',()=>er('audio'));on('timeupdate',()=>tm('audio',el.currentTime,el.duration||0));on('waiting',()=>{if(!el.paused){P.loading=true;sync()}});on('playing',()=>{if(P.loading){P.loading=false;sync()}})})},
  load(t,url){this.bind();if(this.pre===url&&!this.els[1-this.i].error){this.a.pause();this.i=1-this.i;this.pre=''}else{this.pre='';this.a.src=url}return this.a.play().catch(()=>{})},
  warm(url){this.bind();if(!url||this.pre===url)return;const n=this.els[1-this.i];n.preload='auto';n.src=url;n.load();this.pre=url},
  play(){this.a.play().catch(()=>{})},pause(){this.a.pause()},seek(s){this.a.currentTime=s},stop(){this.els.forEach(e=>e.pause())}};
@@ -77,33 +135,48 @@ function ref(t){const l=t.link||'';
  if(t.platform==='youtube'){const m=l.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);return m&&m[1]}
  if(t.platform==='spotify'){const m=l.match(/spotify\.com\/(?:intl-[a-z]+\/)?(track|episode)\/(\w+)/);return m&&`spotify:${m[1]}:${m[2]}`}
  return l}
-function listFor(k){if(k==='L')return [...S.likes].filter(TK);if(k==='T')return S.tracks.filter(t=>t.plays>0).sort((a,b)=>b.plays-a.plays).slice(0,5).map(t=>t.id);if(k==='w')return S.tracks.filter(isW).map(t=>t.id);if(k&&k[0]==='a')return S.tracks.filter(t=>t.artist_id===+k.slice(1)).map(t=>t.id);return S.tracks.map(t=>t.id)}
+function listFor(k){if(k==='O')return Object.keys(OFF.meta).map(Number).filter(TK);if(/^P\d+$/.test(k||'')){const p=S.playlists.find(x=>x.id===+k.slice(1));return p?p.tracks.filter(TK):[]}if(k==='L')return [...S.likes].filter(TK);if(k==='T')return S.tracks.filter(t=>t.plays>0).sort((a,b)=>b.plays-a.plays).slice(0,5).map(t=>t.id);if(k==='w')return S.tracks.filter(isW).map(t=>t.id);if(k&&k[0]==='a')return S.tracks.filter(t=>t.artist_id===+k.slice(1)).map(t=>t.id);return S.tracks.map(t=>t.id)}
 /* Workout = tagged workout/gym/run, or fast enough (BPM at or above the limit, default 100). Tag a song no-workout to keep it out. */
 const isW=t=>{const g=t.tags||[];if(g.some(x=>/^no-?workout$/i.test(x)))return false;if(g.some(x=>/workout|gym|run/i.test(x)))return true;return t.bpm>=(+(S.settings&&S.settings.workout_min_bpm)||100)};
 
 async function playTrack(id,key){const t=TK(id);if(!t)return;
- const ids=listFor(key);P.q=ids.includes(t.id)?ids:S.tracks.map(x=>x.id);
- const kind=D[t.platform]?t.platform:null,r=kind&&ref(t);
- Object.assign(P,{cur:t.id,time:0,dur:t.duration||0,counted:false,listened:0,ended:false,playing:false,loading:!!r,lt:Date.now(),nx:null,warmed:false});
+ const ids=listFor(key),kind=D[t.platform]?t.platform:null;let r=kind&&ref(t);
+ if(kind==='audio'&&OFF.has(t.id)){const u=await OFF.url(t);if(u)r=u}      /* a saved copy plays from the phone, even with no signal */
+ if(!navigator.onLine&&kind&&!(r&&/^blob:/.test(r))){toast("You're offline. Songs you saved for offline still play.");return}
+ P.q=ids.includes(t.id)?ids:S.tracks.map(x=>x.id);
+ Object.assign(P,{cur:t.id,time:0,dur:t.duration||0,counted:false,listened:0,ended:false,playing:false,loading:!!r,lt:Date.now(),nx:null,warmed:false,ghost:t,prog:Date.now(),lastT:0,stall:0,autoSaved:false,curRef:r||''});
  recent=[t.id,...recent.filter(x=>x!==t.id)].slice(0,12);sv('cx-recent',recent);
  plays++;bars();renderCur();sync();
  if(!kind||!r){P.loading=false;sync();toast(t.link?`This link opens on ${PL[t.platform]}. Tap Open to listen there.`:'This track has no listening link yet.');return}
  if(ACT&&ACT!==kind)D[ACT].stop();ACT=kind;
  try{await D[kind].load(t,r)}catch(e){onErr()}setMedia(t)}
 function setVol(){const d=ACT&&D[ACT];if(d&&d.vol)d.vol(P.vol)}
-function onState(b){P.playing=b;if(b){setVol();P.loading=false;P.lt=Date.now();if(!P.warmed){P.warmed=true;setTimeout(warmNext,1800)}}sync()}
-function onTime(t,d){P.time=t||0;if(d&&isFinite(d)&&d>0)P.dur=d;
- if(P.playing){const n=Date.now();P.listened+=Math.min(1,(n-P.lt)/1000);P.lt=n;
-  if(!P.counted&&P.listened>=(P.dur>0&&P.dur<60?P.dur*.5:30)){P.counted=true;const cid=P.cur;fetch('/api/tracks/'+cid+'/play',{method:'POST'}).then(r=>r.ok?r.json():null).then(j=>{const t=TK(cid);if(j&&t&&j.plays>t.plays){t.plays=j.plays;updSc(cid)}}).catch(()=>{});const t=TK(cid);if(t){t.plays++;updSc(cid)}}}else P.lt=Date.now();tick()}
-function onEnd(){if(P.ended)return;P.ended=true;if(P.rep&&ACT){P.counted=false;P.listened=0;D[ACT].seek(0);D[ACT].play();P.ended=false}else nextT()}
+function onState(b){P.playing=b;if(!b&&needReload){location.reload();return}if(b){P.prog=Date.now();setVol();P.loading=false;P.lt=Date.now();if(!P.warmed){P.warmed=true;setTimeout(warmNext,1800)}}sync()}
+function onTime(t,d){t=t||0;if(Math.abs(t-P.lastT)>.15){P.lastT=t;P.prog=Date.now();P.stall=0}P.time=t;if(d&&isFinite(d)&&d>0)P.dur=d;
+ if(P.playing){const n=Date.now();P.listened+=Math.min(2,(n-P.lt)/1000);P.lt=n;
+  if(!P.counted&&P.listened>=(P.dur>0&&P.dur<60?P.dur*.5:30))countStream();
+  if(!P.autoSaved&&P.listened>=12)autoSave()}else P.lt=Date.now();tick()}
+/* One stream = about 30 seconds of listening (half of a short clip). Counted once per play. */
+function countStream(){if(P.counted||P.cur==null)return;P.counted=true;const cid=P.cur;
+ fetch('/api/tracks/'+cid+'/play',{method:'POST'}).then(r=>r.ok?r.json():null).then(j=>{const t=TK(cid);if(j&&t&&j.plays>t.plays){t.plays=j.plays;updSc(cid)}}).catch(()=>{});
+ const t=TK(cid);if(t){t.plays++;updSc(cid)}}
+function onEnd(){if(P.ended)return;P.ended=true;if(!P.counted&&P.listened>=20)countStream();if(P.rep&&ACT){P.counted=false;P.listened=0;D[ACT].seek(0);D[ACT].play();P.ended=false}else nextT()}
 function onErr(){P.loading=false;P.playing=false;sync();const t=TK(P.cur);toast(`Could not play that link in the app. Tap Open to listen on ${PL[t&&t.platform]||'the source'}.`)}
+/* If a song stops moving (network drop, a player that went quiet, a 30 second Spotify preview that never said it ended)
+   it is nudged, then reloaded at the same spot, then skipped. */
+setInterval(async()=>{if(P.cur==null||!ACT||(!P.playing&&!P.loading))return;
+ if(Date.now()-P.prog<(P.loading?25000:9000))return;P.prog=Date.now();P.stall++;
+ if((P.dur>0&&P.lastT>=P.dur-4)||(ACT==='spotify'&&P.lastT>=24)){P.stall=0;return onEnd()}
+ if(P.stall===1){try{D[ACT].play()}catch(e){}return}
+ if(P.stall===2){const t=TK(P.cur),pos=P.lastT,k=ACT;if(t&&P.curRef){try{await D[k].load(t,P.curRef);if(pos>3)setTimeout(()=>{try{D[k].seek(pos)}catch(e){}},1200)}catch(e){}}return}
+ P.stall=0;toast('That song stopped. Skipping to the next one.');nextT()},1000);
 function peekNext(){if(!P.q.length)return null;const i=P.q.indexOf(P.cur);
  if(P.shuf&&P.q.length>1){if(P.nx==null||P.nx===P.cur||!P.q.includes(P.nx))P.nx=P.q.filter(x=>x!==P.cur)[Math.floor(Math.random()*(P.q.length-1))];return P.nx}
  return P.q[(i+1)%P.q.length]}
 function nextT(){const n=peekNext();if(n!=null)playTrack(n)}
 /* Gets the next song ready in the background so it starts without a gap */
 window.cxMedia={toggle:()=>toggle(),next:()=>nextT(),prev:()=>prevT()};
-function warmNext(){const n=peekNext(),t=n!=null&&n!==P.cur&&TK(n);if(!t)return;if(t.artwork)(new Image).src=t.artwork;const d=D[t.platform],r=d&&d.warm&&ref(t);if(r)try{d.warm(r)}catch(e){}}
+async function warmNext(){const n=peekNext(),t=n!=null&&n!==P.cur&&TK(n);if(!t)return;if(t.artwork)(new Image).src=t.artwork;const d=D[t.platform];let r=d&&d.warm&&ref(t);if(r&&t.platform==='audio'&&OFF.has(t.id)){const u=await OFF.url(t);if(u)r=u}if(r)try{d.warm(r)}catch(e){}}
 /* Streams: load the players ahead of the first tap, so the first song does not wait for them */
 function warmup(){const pf=new Set(S.tracks.map(t=>t.platform));
  if(pf.has('youtube'))need('https://www.youtube.com/iframe_api',()=>window.YT&&YT.Player).catch(()=>{});
@@ -127,6 +200,7 @@ let pw=null;
 const PIPCSS='*{box-sizing:border-box}body{margin:0;background:#0C1310;color:#F5FAF6;font:600 14px system-ui,sans-serif;overflow:hidden}.p{display:flex;gap:12px;align-items:center;padding:12px;height:100vh}.a{width:76px;height:76px;border-radius:16px;flex:none;background-size:cover;background-position:center}.m{flex:1;min-width:0}.m b,.m span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.m span{color:#B4C4BA;font-weight:500;font-size:12px}.m i{display:block;height:4px;border-radius:2px;background:#243229;margin:10px 0 8px;overflow:hidden}.m u{display:block;height:100%;width:0;background:#3BFF8A}.c{display:flex;gap:4px;align-items:center}button{all:unset;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;cursor:pointer}button:hover{background:#243229}button.g{background:#3BFF8A;color:#04130B}svg{width:18px;height:18px;fill:currentColor}';
 const pI={prev:'<svg viewBox="0 0 24 24"><path d="M19 20 9 12l10-8z"/><path d="M5 4h2v16H5z"/></svg>',next:'<svg viewBox="0 0 24 24"><path d="m5 4 10 8-10 8z"/><path d="M17 4h2v16h-2z"/></svg>',play:'<svg viewBox="0 0 24 24"><path d="M7 4 20 12 7 20z"/></svg>',pause:'<svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>'};
 async function pip(){
+ if(NPIP){ChaseXNative.pip();return}
  if(pw){pw.close();return}
  if(P.cur==null)return toast('Play a song first, then open the floating player.');
  if(!('documentPictureInPicture' in window))return toast('The floating player needs Chrome or Edge on a computer. On phones, add the app to your home screen and use lock-screen controls.');
@@ -142,8 +216,8 @@ function pipSync(){if(!pw)return;const d=pw.document,t=TK(P.cur);if(!t||!d.getEl
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&prefs.ap&&P.playing&&!pw&&'documentPictureInPicture' in window)pip().catch(()=>{});vsync()});
 
 /* ================= UI PIECES ================= */
-const row=(t,k='',rk)=>{const on=P.cur===t.id,l=S.likes.has(t.id);return `<div class="row${on?' on':''}" data-a="play" data-i="${t.id}" data-l="${k}" role="button" tabindex="0" aria-label="Play ${esc(t.title)} by ${esc(t.artist||'')}">${rk?`<span class="rk">${rk}</span>`:''}${art(t,'s')}<div class="mt"><b>${esc(t.title)}</b><span>${esc(t.artist||'Chase X')}${t.genre?' · '+esc(t.genre):''}</span></div>${k==='w'&&t.bpm?`<span class="bpm">${t.bpm} BPM</span>`:''}<span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b></span><span class="eq"><i></i><i></i><i></i></span><button class="ib" data-a="like" data-i="${t.id}" aria-pressed="${l}" aria-label="${l?'Unlike':'Like'} ${esc(t.title)}">${ic('heart',l?'f pk':'')}</button></div>`};
-const card=t=>`<button class="card" data-a="play" data-i="${t.id}" aria-label="Play ${esc(t.title)}">${art(t)}<b>${esc(t.title)}</b><span>${esc(t.artist||'')}</span></button>`;
+const row=(t,k='',rk)=>{const on=P.cur===t.id,l=S.likes.has(t.id),sd=OFF.has(t.id);return `<div class="row${on?' on':''}${sd?' sv':''}" data-a="play" data-i="${t.id}" data-l="${k}" role="button" tabindex="0" aria-label="Play ${esc(t.title)} by ${esc(t.artist||'')}">${rk?`<span class="rk">${rk}</span>`:''}${art(t,'s')}<div class="mt"><b>${esc(t.title)}</b><span>${esc(t.artist||'Chase X')}${t.genre?' · '+esc(t.genre):''}</span></div>${k==='w'&&t.bpm?`<span class="bpm">${t.bpm} BPM</span>`:''}${sd?`<span class="dli" title="Saved for offline">${ic('dl')}</span>`:''}<span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b></span><span class="eq"><i></i><i></i><i></i></span><button class="ib" data-a="like" data-i="${t.id}" aria-pressed="${l}" aria-label="${l?'Unlike':'Like'} ${esc(t.title)}">${ic('heart',l?'f pk':'')}</button><button class="ib mr" data-a="more" data-i="${t.id}" data-l="${k}" aria-label="More options for ${esc(t.title)}">${ic('more')}</button></div>`};
+const card=t=>`<button class="card${OFF.has(t.id)?' sv':''}" data-a="play" data-i="${t.id}" aria-label="Play ${esc(t.title)}">${art(t)}<b>${esc(t.title)}</b><span>${esc(t.artist||'')}</span></button>`;
 const acard=a=>`<button class="card" data-a="artist" data-i="${a.id}" aria-label="${esc(a.name)}">${art(a)}<b>${esc(a.name)}</b><span>${esc(a.genre||'Artist')}</span></button>`;
 const empty=(m)=>`<p class="empty">${m}</p>`;
 const yid=s=>{const m=String(s||'').match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);return m?m[1]:''};
@@ -222,18 +296,60 @@ function you(){const u=user||{name:'Guest',email:''},ad=user&&user.role==='admin
  $('#you').innerHTML=`<div class="hd rise"><h1>Account</h1></div>
  <div class="pc rise" style="--d:1"><div class="av">${user&&user.avatar?`<img src="${esc(user.avatar)}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover" referrerpolicy="no-referrer">`:esc(ini())}</div><div><h2>${esc(u.name)}</h2><p>${esc(u.email||'Guest session')}</p></div></div>
  <div class="stats rise" style="--d:2"><div><b>${S.likes.size}</b><span>Liked</span></div><div><b>${plays}</b><span>Played</span></div><div><b>${S.bookings.length}</b><span>Bookings</span></div></div>
+ <div class="libt rise" style="--d:3"><button data-a="tab" data-t="liked">${ic('heart','f')}<b>Liked songs</b><span>${S.likes.size}</span></button><button data-a="tab" data-t="plist">${ic('list')}<b>Playlists</b><span>${S.playlists.length}</span></button><button data-a="tab" data-t="offline">${ic('dl')}<b>Saved offline</b><span>${Object.keys(OFF.meta).length}</span></button></div>
  ${S.likes.size?`<div class="sec rise" style="--d:3;margin-top:22px"><h2>Liked songs</h2><button class="lnk" data-a="tab" data-t="liked">See all</button></div><div class="shelf rise" style="--d:3">${[...S.likes].map(TK).filter(Boolean).slice(0,10).map(card).join('')}</div>`:''}
  ${S.bookings.length?`<div class="sec rise" style="--d:3;margin-top:22px"><h2>My bookings</h2></div><div class="rise" style="--d:3">${S.bookings.slice(0,5).map(b=>`<div class="bk"><div><b>${esc(b.service||b.kind)}</b><span>${esc(b.date)} · ${esc(b.slot)}</span></div><span class="st ${esc(b.status)}">${esc(b.status)}</span></div>`).join('')}</div>`:''}
- <div class="rise" style="--d:4;margin-top:14px">${[['ap','Floating player when I leave the tab (desktop)'],['a','Autoplay hero video']].map(s=>`<div class="sr"><span id="l${s[0]}">${s[1]}</span><button class="sw" role="switch" aria-labelledby="l${s[0]}" aria-checked="${!!prefs[s[0]]}" data-a="sw" data-k="${s[0]}"></button></div>`).join('')}</div>
+ <div class="rise" style="--d:4;margin-top:14px">${[['ap','Floating player when I leave the app'],['oc','Keep songs I play for offline'],['a','Autoplay hero video']].map(s=>`<div class="sr"><span id="l${s[0]}">${s[1]}</span><button class="sw" role="switch" aria-labelledby="l${s[0]}" aria-checked="${!!prefs[s[0]]}" data-a="sw" data-k="${s[0]}"></button></div>`).join('')}</div>
  ${socials()}
  ${ad?`<a class="btn btn2 rise" style="--d:5;margin-top:18px;text-decoration:none" href="/admin">${ic('user')}<span>Open admin panel</span></a>`:''}
  <button class="btn btn2 rise" style="--d:5;margin-top:12px;${user?'color:var(--er)':''}" data-a="${user?'out':'signin'}"><span>${user?'Sign out':'Sign in or create account'}</span></button>`}
 
 function liked(){const ts=[...S.likes].map(TK).filter(Boolean);
  $('#liked').innerHTML=`<div class="lkh rise"><div class="lkt">${ic('heart','f')}</div><div><small>Playlist</small><h1>Liked songs</h1><p>${token?ts.length+' song'+(ts.length===1?'':'s'):'Sign in to save songs here'}</p></div></div>
- ${token?`<div class="cta rise" style="--d:1;margin:0 0 16px"><button class="btn" data-a="lplay"${ts.length?'':' disabled'}>${ic('play','f')}<span>Play all</span></button><button class="btn btn2" data-a="lshuf"${ts.length?'':' disabled'}>${ic('shuf')}<span>Shuffle</span></button></div><div class="rows rise" style="--d:2">${ts.map(t=>row(t,'L')).join('')||empty('Tap the heart on any song and it will show up here.')}</div>`
+ ${token?`<div class="cta rise" style="--d:1;margin:0 0 16px"><button class="btn" data-a="lplay"${ts.length?'':' disabled'}>${ic('play','f')}<span>Play all</span></button><button class="btn btn2" data-a="lshuf"${ts.length?'':' disabled'}>${ic('shuf')}<span>Shuffle</span></button>${ts.some(OFF.can)?`<button class="btn btn2" data-a="lsave">${ic('dl')}<span>Save offline</span></button>`:''}</div><div class="rows rise" style="--d:2">${ts.map(t=>row(t,'L')).join('')||empty('Tap the heart on any song and it will show up here.')}</div>`
  :`<div class="gate rise" style="--d:1"><i>${ic('heart')}</i><div><b>Your liked songs live here</b><span>Sign in to like songs and keep them all in one place.</span></div><button class="gb" data-a="signin">Sign in</button></div>`}`}
-const R={home,explore,watch,book,you,liked};
+let curPl=null;
+function offline(){const ts=listFor('O').map(TK),mb=OFF.size()/1048576;
+ $('#offline').innerHTML=`<div class="lkh rise"><div class="lkt" style="background:linear-gradient(135deg,#12C26E,#3BFF8A);box-shadow:0 14px 40px #3BFF8A44">${ic('dl')}</div><div><small>On this device</small><h1>Saved offline</h1><p>${ts.length} song${ts.length===1?'':'s'} · ${mb<10?mb.toFixed(1):Math.round(mb)} MB</p></div></div>
+ <div class="rise" style="--d:1"><div class="sr"><span id="loc">Keep songs I play so they work offline</span><button class="sw" role="switch" aria-labelledby="loc" aria-checked="${!!prefs.oc}" data-a="sw" data-k="oc"></button></div></div>
+ ${ts.length?`<div class="cta rise" style="--d:2;margin:14px 0 16px"><button class="btn" data-a="oplay">${ic('play','f')}<span>Play all</span></button><button class="btn btn2" data-a="oclear"><span>Remove all</span></button></div><div class="rows rise" style="--d:2">${ts.map(t=>row(t,'O')).join('')}</div>`:empty('Nothing saved yet. Songs that are audio files are kept automatically when you play them, or tap the ⋯ on a song and choose Save for offline.')}
+ <p class="note rise">Songs that stream from YouTube, Spotify or SoundCloud cannot be kept offline. Those services do not allow it.</p>`}
+const plCard=p=>`<button class="plc" data-a="plopen" data-i="${p.id}"><div class="lkt pl sm">${ic('list')}</div><b>${esc(p.name)}</b><span>${p.tracks.length} song${p.tracks.length===1?'':'s'}</span></button>`;
+function plist(){const el=$('#plist');
+ if(!token){el.innerHTML=`<div class="hd rise"><h1>Playlists</h1></div><div class="gate rise"><i>${ic('list')}</i><div><b>Make your own playlists</b><span>Sign in to create playlists that follow you to every device.</span></div><button class="gb" data-a="signin">Sign in</button></div>`;return}
+ const p=S.playlists.find(x=>x.id===curPl);
+ if(!p){curPl=null;el.innerHTML=`<div class="hd rise"><h1>Playlists</h1><button class="gb" data-a="plnew">${ic('plus')} New</button></div>${S.playlists.length?`<div class="plg rise">${S.playlists.map(plCard).join('')}</div>`:empty('No playlists yet. Tap New, then add songs with the ⋯ on any song.')}`;return}
+ const ts=p.tracks.map(TK).filter(Boolean),can=ts.filter(OFF.can),all=can.length&&can.every(t=>OFF.has(t.id));
+ el.innerHTML=`<div class="lkh rise"><div class="lkt pl">${ic('list')}</div><div><small>Playlist</small><h1>${esc(p.name)}</h1><p>${ts.length} song${ts.length===1?'':'s'}</p></div></div>
+ <div class="cta rise" style="--d:1;margin:0 0 16px;flex-wrap:wrap"><button class="btn" data-a="plplay"${ts.length?'':' disabled'}>${ic('play','f')}<span>Play</span></button><button class="btn btn2" data-a="plshuf"${ts.length?'':' disabled'}>${ic('shuf')}<span>Shuffle</span></button>${can.length?`<button class="btn btn2" data-a="plsave">${ic('dl')}<span>${all?'Saved offline':'Save offline'}</span></button>`:''}<button class="btn btn2" data-a="plren"><span>Rename</span></button><button class="btn btn2" data-a="pldel" style="color:var(--er)"><span>Delete</span></button><button class="btn btn2" data-a="plback"><span>All playlists</span></button></div>
+ <div class="rows rise" style="--d:2">${ts.map(t=>row(t,'P'+p.id)).join('')||empty('Empty. Tap the ⋯ on any song and choose Add to playlist.')}</div>`}
+
+/* ---- the ⋯ menu and playlist sheets ---- */
+let shCtx=null;
+const openSheet=h=>{$('#shp').innerHTML=h;const e=$('#sh');e.inert=false;e.classList.add('on')};
+const closeSheet=()=>{const e=$('#sh'),a=document.activeElement;if(a&&e.contains(a)&&a.blur)a.blur();e.classList.remove('on');e.inert=true;shCtx=null};
+function menuSheet(id,k){const t=TK(id);if(!t)return;shCtx={id:t.id,k};const l=S.likes.has(t.id),inP=/^P\d+$/.test(k||'');
+ openSheet(`<div class="shh">${art(t,'s')}<div class="mt"><b>${esc(t.title)}</b><span>${esc(t.artist||'')}</span></div></div>
+ <button class="shi" data-a="shpl">${ic('list')}<span>Add to playlist</span></button>
+ <button class="shi" data-a="like" data-i="${t.id}" data-close="1">${ic('heart',l?'f pk':'')}<span>${l?'Remove from liked songs':'Add to liked songs'}</span></button>
+ ${OFF.can(t)?`<button class="shi" data-a="offl" data-i="${t.id}" data-close="1">${ic('dl')}<span>${OFF.has(t.id)?'Remove download':'Save for offline'}</span></button>`:(t.link?`<p class="shn">This song streams from ${esc(PL[t.platform]||'a link')}, so it cannot be saved offline.</p>`:'')}
+ ${inP?`<button class="shi" data-a="plrm" data-i="${t.id}" data-p="${k.slice(1)}" data-close="1">${ic('trash')}<span>Remove from this playlist</span></button>`:''}
+ ${t.link?`<button class="shi" data-a="src2" data-i="${t.id}" data-close="1">${ic('ext')}<span>Open on ${esc(PL[t.platform]||'link')}</span></button>`:''}`)}
+function plSheet(id){const t=TK(id);if(!t)return;if(!token){closeSheet();return needAuth('Sign in to use playlists.')}shCtx={id:t.id,pl:1};
+ openSheet(`<div class="shh"><div class="mt"><b>Add to playlist</b><span>${esc(t.title)}</span></div></div><button class="shi" data-a="plnew2">${ic('plus')}<span>New playlist</span></button>
+ ${S.playlists.map(p=>{const on=p.tracks.includes(t.id);return `<button class="shi" data-a="pltog" data-p="${p.id}" data-i="${t.id}" aria-pressed="${on}">${ic('list')}<span>${esc(p.name)}</span><i class="chk">${on?ic('check'):''}</i></button>`}).join('')}`)}
+function nameSheet(title,val,ctx){shCtx=ctx;openSheet(`<div class="shh"><b>${title}</b></div><input class="in" id="plname" maxlength="60" placeholder="Playlist name" value="${esc(val||'')}" autocomplete="off"><button class="btn" data-a="plok" style="margin-top:12px"><span>Save</span></button>`);setTimeout(()=>{const x=$('#plname');x&&x.focus()},80)}
+async function plCreate(name,addId){if(!token)return needAuth('Sign in to make playlists.');
+ try{const p=await api('/playlists',{body:{name}});S.playlists=[p,...S.playlists];if(addId!=null)await plAdd(p.id,addId,true);toast(addId!=null?'Added to '+p.name:'Playlist created');if(addId==null){curPl=p.id}safeRender();sbar()}catch(e){toast(e.message)}}
+async function plAdd(pid,tid,quiet){const p=S.playlists.find(x=>x.id===pid);if(!p||p.tracks.includes(tid))return;p.tracks=[...p.tracks,tid];
+ try{await api(`/playlists/${pid}/tracks`,{body:{track_id:tid}});if(!quiet)toast('Added to '+p.name)}catch(e){p.tracks=p.tracks.filter(x=>x!==tid);toast(e.message)}safeRender();sbar()}
+async function plRemove(pid,tid){const p=S.playlists.find(x=>x.id===pid);if(!p)return;const old=p.tracks;p.tracks=old.filter(x=>x!==tid);safeRender();
+ try{await api(`/playlists/${pid}/tracks/${tid}`,{method:'DELETE'})}catch(e){p.tracks=old;toast(e.message);safeRender()}}
+async function plDelete(pid){const old=S.playlists;S.playlists=old.filter(x=>x.id!==pid);curPl=null;safeRender();sbar();
+ try{await api('/playlists/'+pid,{method:'DELETE'});toast('Playlist deleted')}catch(e){S.playlists=old;toast(e.message);safeRender();sbar()}}
+async function plRename(pid,name){const p=S.playlists.find(x=>x.id===pid);if(!p)return;const old=p.name;p.name=name;safeRender();sbar();
+ try{await api('/playlists/'+pid,{method:'PATCH',body:{name}})}catch(e){p.name=old;toast(e.message);safeRender();sbar()}}
+const R={home,explore,watch,book,you,liked,plist,offline};
 function go(n){const ix=k=>{const j=TABS.findIndex(x=>x[0]===k);return j<0?TABS.findIndex(x=>x[0]==='you'):j},i=ix(n),pi=curTab?ix(curTab):i,d=i>=pi?1:-1;curTab=n;$('#app').classList.remove('nh');closeArtist();
  $$('.scr').forEach(s=>{const on=s.id===n,was=s.classList.contains('on');if(on&&!was){s.style.setProperty('--dx',(28*d)+'px');void s.offsetWidth}else if(!on&&was)s.style.setProperty('--dx',(-28*d)+'px');
   s.classList.toggle('on',on);s.classList.toggle('fresh',on);s.inert=!on;if(on){s.scrollTop=0;clearTimeout(s.ft);s.ft=setTimeout(()=>s.classList.remove('fresh'),1200)}});
@@ -246,17 +362,21 @@ function mini(){const t=TK(P.cur),m=$('#mini');m.classList.toggle('on',!!t);
  m.innerHTML=`<div class="ml"><div class="mo" data-a="open" role="button" tabindex="0" aria-label="Open player">${art(t,'s')}<div class="mt"><b>${esc(t.title)}</b><span>${esc(P.loading?'Loading...':t.artist||'')}</span></div></div><button class="ib lk" data-a="like" data-i="${t.id}" aria-pressed="${l}" aria-label="${l?'Unlike':'Like'} ${esc(t.title)}">${ic('heart',l?'f pk':'')}</button></div>
  <div class="mc"><div class="mb2"><button class="ib x" data-a="shuf" aria-pressed="${P.shuf}" aria-label="Shuffle">${ic('shuf')}</button><button class="ib x" data-a="prev" aria-label="Previous">${ic('prev','f')}</button><button class="ib pp" data-a="toggle" aria-label="${P.playing?'Pause':'Play'}">${P.loading?SPIN:ic(P.playing?'pause':'play','f')}</button><button class="ib x" data-a="next" aria-label="Next">${ic('next')}</button><button class="ib x" data-a="rep" aria-pressed="${P.rep}" aria-label="Repeat">${ic('rep')}</button></div>
  <div class="msb"><span id="mt1">${fm(P.time)}</span><div class="msk" id="msk" role="slider" aria-label="Seek" tabindex="0"><i></i></div><span id="mt2">${P.dur?fm(P.dur):'0:00'}</span></div></div>
- <div class="mx"><div class="vol" id="vol" role="slider" aria-label="Volume" tabindex="0" style="--p:${P.vol}">${ic('vol')}<div class="vk"><i></i></div></div><span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b><em>streams</em></span><button class="ib" data-a="open" aria-label="Open full player">${ic('up')}</button></div><span class="mbar" id="mb"></span>`;tick()}
+ <div class="mx"><div class="vol" id="vol" role="slider" aria-label="Volume" tabindex="0" style="--p:${P.vol}">${ic('vol')}<div class="vk"><i></i></div></div><span class="sc" data-sc="${t.id}">${ic('chart')}<b>${nf(t.plays)}</b><em>streams</em></span><button class="ib" data-a="more" data-i="${t.id}" data-l="" aria-label="More options">${ic('more')}</button><button class="ib" data-a="open" aria-label="Open full player">${ic('up')}</button></div><span class="mbar" id="mb"></span>`;tick()}
 function np(){const t=TK(P.cur);if(!t)return;const l=S.likes.has(t.id),v=S.videos.findIndex(x=>x.track_id===t.id);
  $('#npa').setAttribute('style',sty(t));$('#npa').innerHTML=t.artwork?`<img src="${esc(t.artwork)}" alt="" onerror="this.remove()">`:'';$('#np').style.setProperty('--g',pal(t)[0]);
  $('#nti').textContent=t.title;$('#nar').textContent=(t.artist||'')+(t.genre?' · '+t.genre:'');$('#nsrc').textContent=srcLine(t);
  const k=$('#nlk');k.dataset.i=t.id;k.setAttribute('aria-pressed',l);k.innerHTML=ic('heart',l?'f pk':'');
  $('#np').classList.toggle('pl',P.playing);$('#bp').innerHTML=P.loading?'<span class="btn ld" style="width:30px;height:30px;background:none;box-shadow:none"><span></span></span>':ic(P.playing?'pause':'play','f');$('#bp').setAttribute('aria-label',P.playing?'Pause':'Play');
- $('#npx').innerHTML=(t.link?`<button class="btn btn2" data-a="src">${ic('ext')}<span>Open on ${esc(PL[t.platform]||'link')}</span></button>`:'')+(v>=0?`<button class="btn btn2" data-a="vtab" data-i="${v}">${ic('tv')}<span>Video</span></button>`:'')}
+ $('#npx').innerHTML=(OFF.can(t)?`<button class="btn btn2" data-a="offl" data-i="${t.id}">${ic('dl')}<span>${OFF.busy.has(t.id)?'Saving...':OFF.has(t.id)?'Saved offline':'Save offline'}</span></button>`:'')+`<button class="btn btn2" data-a="shpl2" data-i="${t.id}">${ic('list')}<span>Playlist</span></button>`+(t.link?`<button class="btn btn2" data-a="src">${ic('ext')}<span>Open on ${esc(PL[t.platform]||'link')}</span></button>`:'')+(v>=0?`<button class="btn btn2" data-a="vtab" data-i="${v}">${ic('tv')}<span>Video</span></button>`:'')}
 function bars(){const s=P.cur||1;$('#wv').innerHTML=[...Array(46)].map((_,i)=>`<i style="--h:${Math.round(10+40*Math.abs(Math.sin(i*.7+s)*Math.cos(i*.23)))}px"></i>`).join('')}
 function tick(){const p=P.dur?P.time/P.dur:0,b=$$('#wv i');b.forEach((e,i)=>e.classList.toggle('p',i/b.length<p));$('#t1').textContent=fm(P.time);$('#t2').textContent=P.dur?'-'+fm(P.dur-P.time):'0:00';const m=$('#mb');if(m)m.style.setProperty('--p',p);const sk=$('#msk');if(sk)sk.style.setProperty('--p',p);const a1=$('#mt1'),a2=$('#mt2');if(a1){a1.textContent=fm(P.time);a2.textContent=P.dur?fm(P.dur):'0:00'}pipSync()}
 let lastMk='';
-function sync(){$('#app').classList.toggle('pl',P.playing);mini();np();tick();pipSync();
+/* The Android app shows a small floating window (picture-in-picture): the page switches to a compact cover + title view. */
+function pushPrefs(){if(window.ChaseXNative&&ChaseXNative.setAuto)try{ChaseXNative.setAuto(!!prefs.ap)}catch(e){}}
+function fillPip(){const v=$('#pipv'),t=TK(P.cur);if(!v)return;v.innerHTML=t?`${art(t,'')}<div class="pvt"><b>${esc(t.title)}</b><span>${esc(t.artist||'')}</span></div>`:''}
+window.cxPip=on=>{document.documentElement.classList.toggle('pip',!!on);if(on)fillPip()};
+function sync(){if(document.documentElement.classList.contains('pip'))fillPip();$('#app').classList.toggle('pl',P.playing);mini();np();tick();pipSync();
  if(window.ChaseXNative&&ChaseXNative.media){const t=TK(P.cur),mk=(t?t.id:'')+':'+!!P.playing;if(t&&mk!==lastMk){lastMk=mk;try{ChaseXNative.media(t.title,t.artist||'Chase X Records',!!P.playing)}catch(e){}}}
 if('mediaSession' in navigator)navigator.mediaSession.playbackState=P.playing?'playing':'paused'}
 function onCurChange(){bars()}
@@ -271,9 +391,30 @@ async function like(id){id=+id;
  catch(e){if(had)S.likes=new Set([id,...S.likes]);else S.likes.delete(id);if(t)t.likes=Math.max(0,(t.likes||0)+(had?1:-1));put();toast(e.message||'Could not save that like.')}}
 function needAuth(msg,act){after={tab:curTab,act:act||null};amsg=msg||'';showAuth()}
 const openNP=o=>{$('#np').classList.toggle('on',o);$('#np').inert=!o};
-document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,i=+b.dataset.i;
+document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,i=+b.dataset.i;if(b.dataset.close)closeSheet();
  switch(a){
- case'tab':go(b.dataset.t);break;
+ case'tab':if(b.dataset.t==='plist')curPl=null;go(b.dataset.t);break;
+ case'more':e.stopPropagation();menuSheet(i,b.dataset.l);break;
+ case'shx':closeSheet();break;
+ case'shpl':plSheet(shCtx&&shCtx.id);break;
+ case'shpl2':plSheet(i);break;
+ case'plnew':nameSheet('New playlist','',{nm:'create'});break;
+ case'plnew2':nameSheet('New playlist','',{nm:'create',add:shCtx&&shCtx.id});break;
+ case'plok':{const v=($('#plname').value||'').trim(),c=shCtx||{};if(!v){toast('Give the playlist a name.');break}closeSheet();if(c.nm==='rename')plRename(c.id,v);else plCreate(v,c.add!=null?c.add:null)}break;
+ case'pltog':{const pid=+b.dataset.p,p=S.playlists.find(x=>x.id===pid);if(!p)break;const was=p.tracks.includes(i);Promise.resolve(was?plRemove(pid,i):plAdd(pid,i,true)).then(()=>{if(shCtx&&shCtx.pl)plSheet(i)});if(was)0}break;
+ case'plrm':plRemove(+b.dataset.p,i);break;
+ case'plopen':curPl=i;go('plist');break;
+ case'plback':curPl=null;renderCur();break;
+ case'plplay':{const l=listFor('P'+curPl);if(l.length){P.shuf=false;P.nx=null;playTrack(l[0],'P'+curPl)}}break;
+ case'plshuf':{const l=listFor('P'+curPl);if(l.length){P.shuf=true;P.nx=null;playTrack(l[Math.floor(Math.random()*l.length)],'P'+curPl)}}break;
+ case'plren':{const p=S.playlists.find(x=>x.id===curPl);if(p)nameSheet('Rename playlist',p.name,{nm:'rename',id:p.id})}break;
+ case'pldel':{const p=S.playlists.find(x=>x.id===curPl);if(p&&confirm('Delete "'+p.name+'"?'))plDelete(p.id)}break;
+ case'plsave':OFF.saveMany(listFor('P'+curPl).map(TK).filter(OFF.can),true);break;
+ case'lsave':OFF.saveMany([...S.likes].map(TK).filter(Boolean).filter(OFF.can),true);break;
+ case'offl':{const t=TK(i);if(!t)break;if(OFF.has(i)&&!OFF.busy.has(i)){OFF.remove(i);toast('Download removed')}else if(OFF.can(t)){OFF.save(t,true).then(ok=>toast(ok?'Saved for offline':'Could not save that song. The file host may not allow it.'))}}break;
+ case'oplay':{const l=listFor('O');if(l.length){P.shuf=false;P.nx=null;playTrack(l[0],'O')}}break;
+ case'oclear':if(confirm('Remove every saved song from this device?'))Promise.all(Object.keys(OFF.meta).map(id=>OFF.remove(+id))).then(()=>toast('Removed'));break;
+ case'src2':{const t=TK(i);if(t&&t.link)window.open(t.link,'_blank','noopener')}break;
  case'go2':if(b.dataset.t==='explore')xseg=+b.dataset.s;else{bseg=+b.dataset.s;svc=-1;slot=-1;bsent=false}go(b.dataset.t);break;
  case'play':playTrack(i,b.dataset.l);break;
  case'toggle':e.stopPropagation();toggle();break;
@@ -311,14 +452,15 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(!b
  case'lplay':{const l=[...S.likes].filter(TK);if(l.length){P.shuf=false;P.nx=null;playTrack(l[0],'L')}}break;
  case'lshuf':{const l=[...S.likes].filter(TK);if(l.length){P.shuf=true;P.nx=null;playTrack(l[Math.floor(Math.random()*l.length)],'L')}}break;
  case'out':signOut();break;
- case'sw':{const k=b.dataset.k;prefs[k]=prefs[k]?0:1;sv('cx-prefs',prefs);b.setAttribute('aria-checked',!!prefs[k]);vsync();setMedia(TK(P.cur)||{})}break;
+ case'sw':{const k=b.dataset.k;prefs[k]=prefs[k]?0:1;sv('cx-prefs',prefs);pushPrefs();b.setAttribute('aria-checked',!!prefs[k]);vsync();setMedia(TK(P.cur)||{})}break;
  case'gapp':location.href='/auth/google/start';break;
  case'gfall':toast('Google sign-in is not set up yet. Add GOOGLE_CLIENT_ID to the .env file.');break;
  }});
 document.addEventListener('input',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f)bf[f]=e.target.value});
 document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('.row,.mo')){e.preventDefault();e.target.click()}
  if(e.code==='Space'&&!/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)&&!e.target.closest('[role=button],[role=slider]')&&P.cur!=null&&$('#auth').classList.contains('gone')){e.preventDefault();toggle()}
- if(e.key==='Escape'){openNP(false);closeArtist()}
+ if(e.key==='Enter'&&e.target.id==='plname'){e.preventDefault();$('[data-a=plok]').click();return}
+ if(e.key==='Escape'){closeSheet();openNP(false);closeArtist()}
  if(e.target.id==='wv'&&/Arrow(Right|Left)/.test(e.key)&&P.dur)seekFrac(Math.max(0,Math.min(1,(P.time+(e.key==='ArrowRight'?5:-5))/P.dur)))});
 document.addEventListener('pointerdown',e=>{const vk=e.target.closest&&e.target.closest('.vk');if(vk){const r=vk.getBoundingClientRect(),f=ev=>{P.vol=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));sv('cx-vol',P.vol);setVol();const v=$('#vol');if(v)v.style.setProperty('--p',P.vol)};f(e);const up=()=>{removeEventListener('pointermove',f);removeEventListener('pointerup',up)};addEventListener('pointermove',f);addEventListener('pointerup',up);return}
  const k=e.target.closest&&e.target.closest('.msk');if(!k)return;const r=k.getBoundingClientRect(),f=ev=>seekFrac(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)));f(e);const up=()=>{removeEventListener('pointermove',f);removeEventListener('pointerup',up)};addEventListener('pointermove',f);addEventListener('pointerup',up)});
@@ -331,7 +473,9 @@ async function doBook(){if(!token)return needAuth('Sign in to book a session.');
  const name=(bf.name||(user?user.name:'')).trim();if(bbusy)return;bbusy=true;book();
  try{await api('/bookings',{body:{service_id:s.id,date:iso(d),slot:slots[slot],name,phone:bf.phone,email:user?user.email:'',notes:bf.notes}});bsent=true;toast('Request sent. We will confirm shortly.');refreshMe()}
  catch(e){toast(e.message);loadTaken()}bbusy=false;book()}
-async function refreshMe(){if(!token)return;try{const j=await api('/me');user=j.user;sv('cx-user',user);S.likes=new Set(j.likes);S.bookings=j.bookings;sv('cx-liked',[...S.likes]);renderCur()}catch(e){}}
+let meSig='';
+async function refreshMe(){if(!token)return;try{const [j,pl]=await Promise.all([api('/me'),api('/playlists').catch(()=>null)]);user=j.user;sv('cx-user',user);S.likes=new Set(arr(j.likes).map(Number));S.bookings=arr(j.bookings);if(Array.isArray(pl))S.playlists=pl.filter(x=>x&&x.id!=null).map(x=>({id:+x.id,name:String(x.name||'Playlist'),tracks:arr(x.tracks).map(Number).filter(Number.isFinite)}));sv('cx-liked',[...S.likes]);
+ const sig=JSON.stringify([j.likes,j.bookings,S.playlists]);if(sig!==meSig){meSig=sig;safeRender()}}catch(e){}}
 
 /* ================= AUTH ================= */
 let mode=0,GCID='';
@@ -351,7 +495,7 @@ function enter(res){sv('cx-guest',0);token=res.token;user=res.user;sv('cx-token'
 function enterGuest(){sv('cx-guest',1);token=null;user=null;sv('cx-token',null);sv('cx-user',null);hideAuth()}
 function hideAuth(){$('#auth').classList.add('gone');$('#auth').inert=true;amsg='';const a=after;after=null;go(a&&a.tab&&R[a.tab]?a.tab:'home')}
 function showAuth(){mode=0;$('#auth').classList.remove('gone');$('#auth').inert=false;authUI();$$('.scr').forEach(s=>s.classList.remove('on'));renderGoogle();vsync()}
-function signOut(quiet){if(ACT)D[ACT].pause();P.playing=false;P.cur=null;mini();sv('cx-guest',0);token=null;user=null;S.likes=new Set();S.bookings=[];sv('cx-token',null);sv('cx-user',null);sv('cx-liked',[]);after=null;amsg='';openNP(false);if(pw)pw.close();showAuth();if(!quiet)toast('Signed out.')}
+function signOut(quiet){if(ACT)D[ACT].pause();P.playing=false;P.cur=null;mini();sv('cx-guest',0);token=null;user=null;S.likes=new Set();S.bookings=[];S.playlists=[];meSig='';sv('cx-token',null);sv('cx-user',null);sv('cx-liked',[]);after=null;amsg='';openNP(false);if(pw)pw.close();showAuth();if(!quiet)toast('Signed out.')}
 $('#af').addEventListener('submit',async e=>{e.preventDefault();if(!val())return;const b=$('#sb');b.classList.add('ld');
  try{const v=id=>$('#'+id).value;enter(await api(mode?'/auth/register':'/auth/login',{body:{name:mode?v('nm').trim():'',email:v('em').trim(),password:v('pw')}}))}
  catch(err){const f=/email|account/i.test(err.message)?'em':'pw';$('#w'+f).dataset.bad=true;$('#'+f+'e').textContent=err.message;toast(err.message)}b.classList.remove('ld')});
@@ -379,7 +523,7 @@ function vsync(){const vis=!document.hidden&&!RM,au=$('#auth').classList.contain
 /* ================= SIDEBAR (tablet and desktop) ================= */
 function sbar(){const l=$('#sbl'),u=$('#sbu');if(!l||!u)return;
  const rc=recent.map(TK).filter(Boolean).slice(0,5),av=user&&user.avatar?`<img src="${esc(user.avatar)}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover" referrerpolicy="no-referrer">`:esc(ini());
- l.innerHTML=`<h3>Your library</h3><button class="lib" data-a="tab" data-t="liked"${curTab==='liked'?' aria-current="page"':''}><i>${ic('heart','f')}</i><div><b>Liked songs</b><span>${token?S.likes.size+' song'+(S.likes.size===1?'':'s'):'Sign in to save songs'}</span></div></button>`+(rc.length?`<h3 style="margin-top:18px">Recently played</h3>${rc.map(t=>`<button class="lib" data-a="play" data-i="${t.id}">${art(t,'s')}<div><b>${esc(t.title)}</b><span>${esc(t.artist||'Chase X')}</span></div></button>`).join('')}`:'');
+ l.innerHTML=`<h3>Your library</h3><button class="lib" data-a="tab" data-t="liked"${curTab==='liked'?' aria-current="page"':''}><i>${ic('heart','f')}</i><div><b>Liked songs</b><span>${token?S.likes.size+' song'+(S.likes.size===1?'':'s'):'Sign in to save songs'}</span></div></button><button class="lib" data-a="tab" data-t="offline"${curTab==='offline'?' aria-current="page"':''}><i class="gr">${ic('dl')}</i><div><b>Saved offline</b><span>${Object.keys(OFF.meta).length} song${Object.keys(OFF.meta).length===1?'':'s'}</span></div></button><h3 style="margin-top:18px">Playlists</h3><button class="lib" data-a="${token?'plnew':'signin'}"><i class="gr2">${ic('plus')}</i><div><b>New playlist</b><span>${token?'Make one':'Sign in to make playlists'}</span></div></button>${S.playlists.slice(0,8).map(p=>`<button class="lib" data-a="plopen" data-i="${p.id}"${curTab==='plist'&&curPl===p.id?' aria-current="page"':''}><i class="gr2">${ic('list')}</i><div><b>${esc(p.name)}</b><span>${p.tracks.length} song${p.tracks.length===1?'':'s'}</span></div></button>`).join('')}`+(rc.length?`<h3 style="margin-top:18px">Recently played</h3>${rc.map(t=>`<button class="lib" data-a="play" data-i="${t.id}">${art(t,'s')}<div><b>${esc(t.title)}</b><span>${esc(t.artist||'Chase X')}</span></div></button>`).join('')}`:'');
  u.innerHTML=`<button class="lib" data-a="tab" data-t="you" aria-label="Account"><span class="av">${av}</span><div><b>${esc(user?user.name:'Guest')}</b><span>${user?'Signed in':'Browsing as guest'}</span></div></button>${token?'':'<button class="gb" data-a="signin">Sign in</button>'}`}
 
 /* ================= BOOT ================= */
@@ -387,16 +531,18 @@ $('#tabs').innerHTML=`<div class="sbh"><span class="logo">${ic('disc')}</span><d
 hprime();hprog();
 (async()=>{
 if(!token){const gl=ld('cx-liked',[]);if(gl.length){sv('cx-gl',gl);sv('cx-liked',[])}}
- const cb=ld('cx-boot',null),apply=b=>Object.assign(S,{tracks:b.tracks,artists:b.artists,videos:b.videos,services:b.services,settings:b.settings});
+ const cb=ld('cx-boot',null),apply=b=>Object.assign(S,norm(b));
  const fresh=Promise.all([api('/config'),api('/bootstrap')]);fresh.catch(()=>{});
  if(cb&&cb.b&&cb.b.tracks){apply(cb.b);GCID=cb.g||''}
  else{try{const [c,b]=await fresh;GCID=c.googleClientId||'';apply(b);sv('cx-boot',{g:GCID,b})}catch(e){toast('Cannot reach the server. Check your connection and try again.')}}
- if(cb&&cb.b&&cb.b.tracks)fresh.then(([c,b])=>{GCID=c.googleClientId||GCID;apply(b);sv('cx-boot',{g:GCID,b});renderCur()}).catch(()=>{});
+ if(cb&&cb.b&&cb.b.tracks)fresh.then(([c,b])=>{GCID=c.googleClientId||GCID;const before=sigOf();apply(b);sv('cx-boot',{g:GCID,b});if(sigOf()!==before)safeRender()}).catch(()=>{});
  authUI();bars();
  {const ac=new URLSearchParams(location.search).get('ac');if(ac){history.replaceState(null,'','/');try{enter(await api('/auth/app-exchange',{body:{code:ac}}))}catch(e){toast(e.message)}}}
  if(token){hideAuth();refreshMe()}else if(ld('cx-guest',0)){hideAuth()}else showAuth();
  setTimeout(()=>$('#splash').classList.add('gone'),600);
- (window.requestIdleCallback||setTimeout)(warmup);
+ (window.requestIdleCallback||setTimeout)(warmup);offBanner();pushPrefs();
 })();
 
-if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+ let had=!!navigator.serviceWorker.controller;
+ navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!had){had=true;return}if(P.playing){needReload=true;toast('A new version is ready. It loads when you pause.')}else location.reload()})}

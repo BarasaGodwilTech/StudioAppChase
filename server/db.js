@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 async function init() {
   await q(SCHEMA);
   await q('ALTER TABLE likes ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ DEFAULT now()');
+  await q('CREATE TABLE IF NOT EXISTS playlists(id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())');
+  await q('CREATE TABLE IF NOT EXISTS playlist_tracks(playlist_id INT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE, track_id INT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE, pos INT NOT NULL DEFAULT 0, added_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY(playlist_id, track_id))');
+  await q('CREATE INDEX IF NOT EXISTS playlists_user_idx ON playlists(user_id)');
   await q('ALTER TABLE plays ADD COLUMN IF NOT EXISTS who TEXT');
   await q('ALTER TABLE tracks ADD COLUMN IF NOT EXISTS bpm_source TEXT');
   await q('ALTER TABLE tracks ADD COLUMN IF NOT EXISTS bpm_checked TIMESTAMPTZ');

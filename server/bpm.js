@@ -4,7 +4,10 @@
    YouTube, Spotify and SoundCloud do not let anyone read their audio, so those songs can only use step 2
    (or the admin can measure an uploaded copy of the song, or tap the tempo by hand). */
 const MusicTempo = require('music-tempo');
+const fs = require('fs');
+const path = require('path');
 const { detect, safeUrl } = require('./linkinfo');
+const UPLOADS = path.join(__dirname, '..', 'public', 'uploads');
 
 const SR = 44100;                 // the tempo library expects 44.1 kHz audio
 const MAX_BYTES = 30 * 1024 * 1024;
@@ -65,7 +68,14 @@ async function fromBuffer(buf) {
   return { bpm: Math.round(r.bpm), confidence: r.confidence, duration: Math.round(dur) };
 }
 
+async function readLocal(link) {
+  const m = /^\/?uploads\/([\w.-]+)$/.exec(link);
+  if (!m) throw new Error('Unsafe file path.');
+  return fs.promises.readFile(path.join(UPLOADS, m[1]));
+}
+
 async function download(url) {
+  if (/^\/?uploads\//.test(url)) return readLocal(url);
   const res = await fetch(safeUrl(url), { signal: AbortSignal.timeout(45000), redirect: 'follow', headers: { 'user-agent': 'Mozilla/5.0 (compatible; ChaseXRecordsBot/1.0)' } });
   if (!res.ok) throw new Error('The audio link answered with HTTP ' + res.status + '.');
   if (+res.headers.get('content-length') > MAX_BYTES) throw new Error('That audio file is too big to analyse (limit 30 MB).');

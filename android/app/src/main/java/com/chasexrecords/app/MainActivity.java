@@ -3,7 +3,10 @@ package com.chasexrecords.app;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
+import android.app.Dialog;
+import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
+import android.app.RemoteAction;
 import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -12,7 +15,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.drawable.Icon;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -46,6 +51,8 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
@@ -69,6 +76,7 @@ public class MainActivity extends Activity {
     private String siteHost;
     private volatile boolean destroyed = false;
     private volatile boolean musicOn = false;
+    private volatile boolean autoPip = true;
     private boolean askedNotif = false;
     private BroadcastReceiver mediaRx;
     private volatile int launchId = 0;
@@ -153,22 +161,36 @@ public class MainActivity extends Activity {
             // Links that open a new window (target="_blank") go to the phone's browser or app.
             @Override
             public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
-                WebView temp = new WebView(MainActivity.this);
+                final WebView temp = new WebView(MainActivity.this);
+                WebSettings ts = temp.getSettings();
+                ts.setJavaScriptEnabled(true);
+                ts.setDomStorageEnabled(true);
+                ts.setUserAgentString(web.getSettings().getUserAgentString());
+                CookieManager.getInstance().setAcceptThirdPartyCookies(temp, true);
+                final Dialog[] dlg = {null};
                 final boolean[] done = {false};
-                temp.setWebViewClient(new WebViewClient() {
+                temp.setWebChromeClient(new WebChromeClient() {
                     @Override
-                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                        if (!done[0]) { done[0] = true; openOutside(r.getUrl()); }
+                    public void onCloseWindow(WebView w) { temp.post(() -> closePopup(dlg[0], temp)); }
+                });
+                temp.setWebViewClient(new WebViewClient() {
+                    /** Spotify pages open inside the app (so sign-in is shared with the player); everything else goes to the browser. */
+                    private boolean handle(String url) {
+                        if (done[0] || url == null || url.equals("about:blank")) return true;
+                        Uri u = Uri.parse(url);
+                        if (isSpotifyHost(u.getHost())) {
+                            if (dlg[0] == null) dlg[0] = showPopup(temp);
+                            return false;
+                        }
+                        done[0] = true;
+                        openOutside(u);
+                        temp.post(() -> closePopup(dlg[0], temp));
                         return true;
                     }
                     @Override
-                    public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
-                        if (!done[0] && url != null && !url.equals("about:blank")) {
-                            done[0] = true;
-                            openOutside(Uri.parse(url));
-                            v.stopLoading();
-                        }
-                    }
+                    public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) { return handle(r.getUrl().toString()); }
+                    @Override
+                    public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) { handle(url); }
                 });
                 ((WebView.WebViewTransport) resultMsg.obj).setWebView(temp);
                 resultMsg.sendToTarget();
@@ -192,7 +214,17 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPermissionRequest(PermissionRequest request) {
-                request.deny();
+                // Spotify plays full songs through protected (DRM) playback; without this it falls back to 30 second previews.
+                // Allowed for Spotify only. Camera, microphone and everything else stay blocked.
+                Uri o = request.getOrigin();
+                List<String> ok = new ArrayList<>();
+                if (o != null && isSpotifyHost(o.getHost())) {
+                    for (String r : request.getResources()) {
+                        if (PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID.equals(r)) ok.add(r);
+                    }
+                }
+                if (ok.isEmpty()) request.deny();
+                else request.grant(ok.toArray(new String[0]));
             }
         });
 
@@ -367,6 +399,28 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    private static boolean isSpotifyHost(String h) {
+        return h != null && (h.equals("spotify.com") || h.endsWith(".spotify.com") || h.endsWith(".scdn.co"));
+    }
+
+    private Dialog showPopup(WebView w) {
+        Dialog d = new Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        FrameLayout f = new FrameLayout(this);
+        f.setBackgroundColor(Color.BLACK);
+        f.addView(w, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        d.setContentView(f);
+        d.setOnDismissListener(x -> { try { f.removeView(w); w.destroy(); } catch (Exception ignored) { } });
+        d.show();
+        return d;
+    }
+
+    private void closePopup(Dialog d, WebView w) {
+        try {
+            if (d != null && d.isShowing()) d.dismiss();
+            else w.destroy();
+        } catch (Exception ignored) { }
+    }
+
     private void openOutside(Uri u) {
         try {
             Intent i = new Intent(Intent.ACTION_VIEW, u).addCategory(Intent.CATEGORY_BROWSABLE);
@@ -420,14 +474,46 @@ public class MainActivity extends Activity {
                 && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
     }
 
-    /** Shrinks the app into a small floating video window. Only works while a video is full screen. */
+    /** Music or a full-screen video can float. */
+    private boolean canFloat() { return customView != null || musicOn; }
+
+    @TargetApi(Build.VERSION_CODES.O)
+    private RemoteAction remote(int icon, String title, String cmd, int code) {
+        Intent i = new Intent(PlaybackService.ACTION).setPackage(getPackageName()).putExtra("cmd", cmd);
+        PendingIntent pi = PendingIntent.getBroadcast(this, code, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new RemoteAction(Icon.createWithResource(this, icon), title, title, pi);
+    }
+
+    @TargetApi(Build.VERSION_CODES.O)
+    private PictureInPictureParams pipParams() {
+        PictureInPictureParams.Builder b = new PictureInPictureParams.Builder().setAspectRatio(new Rational(16, 9));
+        List<RemoteAction> acts = new ArrayList<>();
+        acts.add(remote(android.R.drawable.ic_media_previous, "Previous", "prev", 11));
+        acts.add(remote(musicOn ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                musicOn ? "Pause" : "Play", "toggle", 12));
+        acts.add(remote(android.R.drawable.ic_media_next, "Next", "next", 13));
+        b.setActions(acts);
+        if (Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(autoPip && musicOn);   // gesture navigation floats it smoothly
+        return b.build();
+    }
+
+    @TargetApi(Build.VERSION_CODES.O)
+    private void refreshPipParams() {
+        if (!pipSupported()) return;
+        try { setPictureInPictureParams(pipParams()); } catch (Exception ignored) { }
+    }
+
+    /** Shrinks the app into a small floating window (cover + title for music, the picture for video). */
     @TargetApi(Build.VERSION_CODES.O)
     private void enterPip() {
-        if (customView == null || !pipSupported()) return;
-        try {
-            enterPictureInPictureMode(new PictureInPictureParams.Builder()
-                    .setAspectRatio(new Rational(16, 9)).build());
-        } catch (Exception ignored) { }
+        if (!canFloat() || !pipSupported()) return;
+        try { enterPictureInPictureMode(pipParams()); } catch (Exception ignored) { }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean inPip, Configuration cfg) {
+        super.onPictureInPictureModeChanged(inPip, cfg);
+        if (web != null) web.evaluateJavascript("window.cxPip&&cxPip(" + inPip + ")", null);
     }
 
     /** Called by the page (window.ChaseXNative). */
@@ -436,7 +522,21 @@ public class MainActivity extends Activity {
         public boolean canPip() { return pipSupported(); }
 
         @JavascriptInterface
-        public void pip() { runOnUiThread(() -> enterPip()); }
+        public void pip() {
+            runOnUiThread(() -> {
+                if (!canFloat()) {
+                    web.evaluateJavascript("toast&&toast('Play a song first, then float the player.')", null);
+                    return;
+                }
+                enterPip();
+            });
+        }
+
+        /** The "Floating player when I leave the app" setting. */
+        @JavascriptInterface
+        public void setAuto(boolean on) {
+            runOnUiThread(() -> { autoPip = on; if (Build.VERSION.SDK_INT >= 26) refreshPipParams(); });
+        }
 
         /** The page reports the current song so Android can show it on the lock screen and keep it playing. */
         @JavascriptInterface
@@ -450,15 +550,16 @@ public class MainActivity extends Activity {
                     requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
                 }
                 PlaybackService.update(MainActivity.this, title, artist, playing);
+                if (Build.VERSION.SDK_INT >= 26) refreshPipParams();
             });
         }
     }
 
-    /** Leaving the app while a video is full screen floats it automatically. */
+    /** Leaving the app while a video is full screen, or music is playing (and the setting is on), floats it automatically. */
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        enterPip();
+        if (customView != null || (autoPip && musicOn)) enterPip();
     }
 
     @Override

@@ -240,3 +240,36 @@ h1{font-size:30px;line-height:1.08}h2{font-size:20px;line-height:1.2}
 .vk i:after{content:"";position:absolute;top:50%;left:calc(var(--p,1)*100%);width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;opacity:0;transition:opacity .2s}.vk:hover i:after{opacity:1}
 .gu.pv{display:block;text-align:center;margin-top:2px;font-size:13px;color:var(--t3)}
 @media(min-width:1024px){.mini .vol{display:flex}}
+
+/* ===== offline, playlists, menus ===== */
+.row .mr{opacity:.8}.row .dli{display:inline-flex;color:var(--li);flex:none}.row .dli .ic{width:15px;height:15px}
+.app.off .row:not(.sv),.app.off .card:not(.sv){opacity:.38}
+.ofl{display:none;position:absolute;top:0;left:0;right:0;z-index:60;padding:calc(8px + env(safe-area-inset-top,0px)) 16px 8px;text-align:center;font-size:13px;font-weight:600;background:#3B2A06;color:#FFD27A;border-bottom:1px solid #FFB22455}
+.app.off .ofl{display:block}
+@media(min-width:640px){.ofl{left:var(--sbw);padding-top:8px}}
+.sh2{position:absolute;inset:0;z-index:70;display:flex;align-items:flex-end;justify-content:center;visibility:hidden;opacity:0;transition:opacity .25s,visibility .25s}
+.sh2.on{visibility:visible;opacity:1}.shb{position:absolute;inset:0;background:#000A}
+.shp{position:relative;width:min(520px,100%);max-height:82%;overflow:auto;background:#101A14;border:1px solid var(--ln);border-radius:28px 28px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));transform:translateY(24px);transition:transform .3s var(--sp)}
+.sh2.on .shp{transform:none}
+@media(min-width:640px){.sh2{align-items:center}.shp{border-radius:28px;padding-bottom:18px}}
+.shh{display:flex;align-items:center;gap:12px;padding:4px 6px 14px}.shh .art.s{width:52px;border-radius:12px}.shh b{display:block;font-size:17px}.shh span{font-size:13px;color:var(--t2)}.shh>b{font-size:19px}
+.shi{display:flex;align-items:center;gap:14px;width:100%;min-height:52px;padding:0 12px;border-radius:16px;text-align:left;font-size:15px;font-weight:600}.shi:hover{background:var(--el)}
+.shi .ic{width:22px;height:22px;flex:none;color:var(--t2)}.shi span{flex:1}.shi .chk{width:24px;height:24px;display:grid;place-items:center;border-radius:50%;border:1.5px solid var(--ln)}
+.shi[aria-pressed=true] .chk{background:var(--pitch);border-color:transparent;color:var(--on)}.shi .chk .ic{width:15px;height:15px;color:inherit}
+.shn{margin:6px 12px 2px;font-size:13px;color:var(--t3)}
+.shp .in{width:100%;height:50px;border-radius:16px;background:var(--ov);border:1px solid var(--ln);padding:0 16px;color:var(--tx);font-size:16px}
+.libt{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+.libt button{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:14px;border-radius:20px;background:var(--el);border:1px solid var(--ln);text-align:left}
+.libt .ic{width:22px;height:22px;color:var(--li)}.libt b{font-size:14px}.libt span{font-size:12px;color:var(--t3)}
+.plg{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+.plc{display:flex;flex-direction:column;gap:4px;padding:14px;border-radius:22px;background:var(--el);border:1px solid var(--ln);text-align:left}.plc b{font-size:15px}.plc span{font-size:12.5px;color:var(--t2)}
+.lkt.pl{background:linear-gradient(135deg,#12C26E,#1E90FF);box-shadow:0 14px 40px #1E90FF44}.lkt.sm{width:56px;height:56px;border-radius:16px;margin-bottom:8px;box-shadow:none}.lkt.sm .ic{width:26px;height:26px}
+.lib>i.gr{background:linear-gradient(135deg,#12C26E,#3BFF8A)}.lib>i.gr2{background:linear-gradient(135deg,#1E90FF,#6C5CE7)}
+.note{font-size:13px;color:var(--t3);margin:18px 2px 0;line-height:1.5}
+.hd{display:flex;align-items:center;justify-content:space-between;gap:12px}.hd .gb{height:38px;padding:0 16px;display:inline-flex;align-items:center;gap:6px}.hd .gb .ic{width:18px;height:18px}
+/* floating window inside the Android app */
+#pipv{display:none;position:fixed;inset:0;z-index:9999;background:#000;overflow:hidden}
+#pipv .art{position:absolute;inset:0;width:100%;height:100%;border-radius:0}#pipv .art img{width:100%;height:100%;object-fit:cover}
+#pipv .pvt{position:absolute;left:0;right:0;bottom:0;padding:26px 12px 10px;background:linear-gradient(transparent,#000D);color:#fff}
+#pipv .pvt b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#pipv .pvt span{font-size:12px;opacity:.75}
+html.pip .stage{display:none!important}html.pip #pipv{display:block}

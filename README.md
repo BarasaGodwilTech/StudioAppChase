@@ -70,3 +70,18 @@ While a song plays, the app runs a media service: music keeps going with the scr
   - **YouTube, Spotify and SoundCloud links cannot be measured** (they do not share their audio, and Spotify removed its tempo data). For those, open the song in Admin and use **From file** (pick your own copy of the song; it is measured and not stored) or **Tap** (tap along to the beat), then Save.
 - Admin > Songs > **Detect BPMs** measures every song that has none. A small "auto" label shows which BPMs were measured for you.
 - Accuracy: slow songs can be read as double speed by this kind of detector, so readings above 165 are halved. A real 170+ BPM song (drum and bass) will read as half, so type its real BPM in.
+
+## Offline, playlists and the floating player
+- **Saved offline:** songs that are audio files (an mp3 you upload in Admin, or a link to a file on a host that allows it) are kept on the device when played (up to 40 songs / 300 MB, switch in You > settings) and can be saved on purpose with the ⋯ menu, the player, a playlist or Liked songs. Saved songs play with no signal. YouTube, Spotify and SoundCloud songs cannot be saved offline: those services do not allow it.
+- **Playlists:** sign in, then tap ⋯ on any song > Add to playlist. Playlists are stored in your account and show in the sidebar on tablets and desktops.
+- **App data stays fresh:** the app checks for admin changes every minute and whenever you come back to it. The service worker caches the app so it opens offline, and updates apply as soon as you are online.
+- **Admin saves are checked:** links, BPM, status, tags and so on are validated on the server, so a typo can never break the app.
+- **Floating player (Android app):** the floating-player button, or leaving the app while music plays (setting: "Floating player when I leave the app"), shrinks the app to a small cover + title window with previous / play / next buttons. This needs a new APK build.
+- **Spotify in the app:** full songs need Spotify's protected playback (now allowed for Spotify only) and a Spotify sign-in inside the app. Without a sign-in Spotify itself limits embeds to 30-second previews. Previews that end now move on to the next song and still count as a stream.
+- **Audio hosting note:** files uploaded in Admin are stored on the server's disk. On Render's free plan that disk is cleared when you redeploy, so re-upload after a deploy (or add a Render persistent disk).
+
+## Measuring BPM from YouTube, Spotify and SoundCloud links
+Admin > Songs > **Detect BPMs** measures what it can (audio files, Deezer), then shows every song that is still missing a BPM with the reason. For YouTube, SoundCloud and Spotify links the **Listen** button (or "Measure by listening" for all of them) plays the link in the admin page and works the tempo out from the sound. It needs desktop Chrome or Edge: choose **This tab** and tick **Also share tab audio** when the browser asks. Nothing is recorded or saved. If a video starts with an advert or a long intro, check the result by ear.
+
+## Background BPM listening (Admin > Songs)
+Turn on **Background listening** once per visit and choose **This tab** + **Also share tab audio** when the browser asks. A hidden, silent player then measures every YouTube, SoundCloud and Spotify song that has no BPM, one after another, and picks up new songs you add within a minute. A small chip at the bottom left shows progress; **Stop** turns it off. Keep the admin page open (it can be minimised or on a spare computer). Browsers do not allow a website to listen to other sites without this one-time permission, so it cannot run with the admin page closed. Songs it cannot measure are skipped and retried after 24 hours; check a few results by ear.

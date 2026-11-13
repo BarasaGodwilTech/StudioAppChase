@@ -19,7 +19,13 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
 
 /* ---------- helpers ---------- */
-const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(e.status || 500).json({ error: e.status ? e.message : 'Server error' }); });
+const DB_ERRORS = { '23503': [400, 'That is linked to something that does not exist (for example a deleted artist).'], '23505': [409, 'That already exists.'], '23502': [400, 'A required field is missing.'], '22P02': [400, 'One of the values has the wrong format.'], '22003': [400, 'A number is too big or too small.'], '22007': [400, 'That date is not valid.'], '22008': [400, 'That date is not valid.'] };
+const wrap = fn => (req, res) => fn(req, res).catch(e => {
+  const db = DB_ERRORS[e.code];
+  if (!e.status) console.error(e);
+  const status = e.status || (db && db[0]) || 500;
+  res.status(status).json({ error: e.status ? e.message : db ? db[1] : 'Server error' });
+});
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const sign = u => jwt.sign({ id: u.id, role: u.role }, SECRET, { expiresIn: '30d' });
 const pub = u => ({ id: u.id, name: u.name, email: u.email, avatar: u.avatar, role: u.role });
@@ -63,6 +69,7 @@ const trackSql = `SELECT t.id,t.bpm_source,t.title,t.artist_id,a.name AS artist,
   FROM tracks t LEFT JOIN artists a ON a.id=t.artist_id`;
 const withPlatform = r => ({ ...r, platform: detect(r.link) });
 
+app.use(['/api/bootstrap', '/api/config'], (_req, res, next) => { res.set('Cache-Control', 'no-cache'); next(); });
 app.get('/api/bootstrap', wrap(async (_req, res) => {
   const [tracks, artists, videos, services, settings] = await Promise.all([
     q(trackSql + " WHERE t.status='published' ORDER BY t.release_date DESC, t.id DESC"),
@@ -185,6 +192,45 @@ app.post('/api/auth/app-exchange', limit(30, 600000), wrap(async (req, res) => {
   res.json({ token: c.token, user: c.user });
 }));
 
+/* ---------- playlists (each belongs to one signed-in user) ---------- */
+const plSql = `SELECT p.id, p.name, COALESCE(array_agg(pt.track_id ORDER BY pt.pos, pt.added_at) FILTER (WHERE pt.track_id IS NOT NULL), '{}') AS tracks
+  FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id`;
+const myPlaylist = async (req) => {
+  const p = (await q('SELECT id, name FROM playlists WHERE id=$1 AND user_id=$2', [+req.params.id, req.user.id])).rows[0];
+  if (!p) throw fail(404, 'Playlist not found.');
+  return p;
+};
+app.get('/api/playlists', auth(), wrap(async (req, res) => res.json((await q(plSql + ' WHERE p.user_id=$1 GROUP BY p.id ORDER BY p.updated_at DESC, p.id DESC', [req.user.id])).rows)));
+app.post('/api/playlists', auth(), limit(40, 600000), wrap(async (req, res) => {
+  const name = text((req.body || {}).name, 60, 'The playlist name', true);
+  if ((await q('SELECT count(*)::int n FROM playlists WHERE user_id=$1', [req.user.id])).rows[0].n >= 60) throw fail(400, 'You can have up to 60 playlists.');
+  const p = (await q('INSERT INTO playlists(user_id,name) VALUES($1,$2) RETURNING id,name', [req.user.id, name])).rows[0];
+  res.json({ ...p, tracks: [] });
+}));
+app.patch('/api/playlists/:id', auth(), wrap(async (req, res) => {
+  await myPlaylist(req);
+  const name = text((req.body || {}).name, 60, 'The playlist name', true);
+  await q('UPDATE playlists SET name=$1, updated_at=now() WHERE id=$2', [name, +req.params.id]);
+  res.json({ ok: true, name });
+}));
+app.delete('/api/playlists/:id', auth(), wrap(async (req, res) => { await myPlaylist(req); await q('DELETE FROM playlists WHERE id=$1', [+req.params.id]); res.json({ ok: true }); }));
+app.post('/api/playlists/:id/tracks', auth(), limit(200, 600000), wrap(async (req, res) => {
+  await myPlaylist(req);
+  const tid = whole((req.body || {}).track_id, 1, 2147483647, 'The song');
+  if (!tid || !(await q("SELECT 1 FROM tracks WHERE id=$1 AND status='published'", [tid])).rows[0]) throw fail(404, 'Song not found.');
+  const n = (await q('SELECT count(*)::int n, COALESCE(max(pos),0) m FROM playlist_tracks WHERE playlist_id=$1', [+req.params.id])).rows[0];
+  if (n.n >= 500) throw fail(400, 'A playlist can hold up to 500 songs.');
+  await q('INSERT INTO playlist_tracks(playlist_id,track_id,pos) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [+req.params.id, tid, n.m + 1]);
+  await q('UPDATE playlists SET updated_at=now() WHERE id=$1', [+req.params.id]);
+  res.json({ ok: true });
+}));
+app.delete('/api/playlists/:id/tracks/:tid', auth(), wrap(async (req, res) => {
+  await myPlaylist(req);
+  await q('DELETE FROM playlist_tracks WHERE playlist_id=$1 AND track_id=$2', [+req.params.id, +req.params.tid]);
+  await q('UPDATE playlists SET updated_at=now() WHERE id=$1', [+req.params.id]);
+  res.json({ ok: true });
+}));
+
 app.get('/api/me', auth(), wrap(async (req, res) => {
   const u = (await q('SELECT * FROM users WHERE id=$1', [req.user.id])).rows[0];
   if (!u) throw fail(401, 'Please sign in again.');
@@ -233,9 +279,69 @@ const RES = {
 };
 const clean = v => (v === '' ? null : v);
 
+/* ---------- checks on everything the admin saves, so bad data can never reach the app ---------- */
+const isUrl = v => { try { return /^https?:$/.test(new URL(String(v)).protocol); } catch { return false; } };
+const isMedia = v => /^\/?(uploads|videos|images|icons)\/[\w./-]+$/.test(v) || isUrl(v);
+const text = (v, max, what, required) => { v = v == null ? '' : String(v).trim(); if (required && !v) throw fail(400, `${what} is required.`); if (v.length > max) throw fail(400, `${what} is too long (limit ${max} characters).`); return v || null; };
+const whole = (v, lo, hi, what) => { if (v === '' || v == null) return null; const n = Number(v); if (!Number.isFinite(n) || n < lo || n > hi) throw fail(400, `${what} must be a number from ${lo} to ${hi}.`); return Math.round(n); };
+const media = (v, what) => { v = text(v, 1000, what); if (v && !isMedia(v)) throw fail(400, `${what} must be a web address starting with http:// or https://, or an uploaded file.`); return v; };
+const oneOf = (v, list, what) => { if (!list.includes(v)) throw fail(400, `${what} must be one of: ${list.join(', ')}.`); return v; };
+const colors = v => (Array.isArray(v) ? v.map(String).filter(c => /^#[0-9a-f]{6}$/i.test(c)).slice(0, 3) : []);
+const VALIDATE = {
+  tracks: (b, full) => {
+    const o = { ...b };
+    if (full || 'title' in b) o.title = text(b.title, 200, 'The song title', true);
+    if ('link' in b) { o.link = text(b.link, 1000, 'The listening link'); if (o.link && !isMedia(o.link) && !/^spotify:track:\w+$/.test(o.link)) throw fail(400, 'The listening link must start with http:// or https://, or be an uploaded file.'); }
+    if ('artwork' in b) o.artwork = media(b.artwork, 'The artwork');
+    if ('genre' in b) o.genre = text(b.genre, 60, 'The genre');
+    if ('bpm' in b) o.bpm = whole(b.bpm, 30, 300, 'BPM');
+    if ('duration' in b) o.duration = whole(b.duration, 0, 36000, 'The duration');
+    if ('artist_id' in b) o.artist_id = whole(b.artist_id, 1, 2147483647, 'The artist');
+    if ('status' in b) o.status = oneOf(b.status, ['published', 'draft'], 'Status');
+    if ('tags' in b) { if (!Array.isArray(b.tags)) throw fail(400, 'Tags must be a list.'); o.tags = [...new Set(b.tags.map(x => String(x).trim().toLowerCase().slice(0, 30)).filter(Boolean))].slice(0, 20); }
+    if ('palette' in b) o.palette = colors(b.palette);
+    if ('release_date' in b && b.release_date) { if (isNaN(Date.parse(b.release_date))) throw fail(400, 'The release date is not valid.'); }
+    return o;
+  },
+  artists: (b, full) => {
+    const o = { ...b };
+    if (full || 'name' in b) o.name = text(b.name, 120, 'The artist name', true);
+    if ('genre' in b) o.genre = text(b.genre, 60, 'The genre');
+    if ('bio' in b) o.bio = text(b.bio, 3000, 'The bio');
+    if ('image' in b) o.image = media(b.image, 'The photo');
+    if ('instagram' in b) o.instagram = text(b.instagram, 120, 'The Instagram handle');
+    if ('palette' in b) o.palette = colors(b.palette);
+    if ('status' in b) o.status = oneOf(b.status, ['active', 'hidden', 'draft', 'published'], 'Status');
+    return o;
+  },
+  videos: (b, full) => {
+    const o = { ...b };
+    if (full || 'title' in b) o.title = text(b.title, 200, 'The video title', true);
+    if ('subtitle' in b) o.subtitle = text(b.subtitle, 300, 'The subtitle');
+    if (full || 'url' in b) { o.url = media(b.url, 'The video link'); if (!o.url) throw fail(400, 'The video link is required.'); }
+    if ('poster' in b) o.poster = media(b.poster, 'The cover image');
+    if ('parts' in b) o.parts = whole(b.parts, 1, 30, 'Parts');
+    if ('track_id' in b) o.track_id = whole(b.track_id, 1, 2147483647, 'The linked song');
+    if ('sort' in b) o.sort = whole(b.sort, -100000, 100000, 'Order');
+    if ('status' in b) o.status = oneOf(b.status, ['published', 'draft'], 'Status');
+    return o;
+  },
+  services: (b, full) => {
+    const o = { ...b };
+    if (full || 'name' in b) o.name = text(b.name, 120, 'The service name', true);
+    if ('kind' in b) o.kind = text(b.kind, 30, 'The type', true);
+    if ('description' in b) o.description = text(b.description, 1000, 'The description');
+    if ('price' in b) o.price = b.price === '' || b.price == null ? 0 : (() => { const n = Number(b.price); if (!Number.isFinite(n) || n < 0 || n > 1e9) throw fail(400, 'The price must be zero or more.'); return n; })();
+    if ('duration_min' in b) o.duration_min = whole(b.duration_min, 5, 1440, 'The length in minutes');
+    if ('sort' in b) o.sort = whole(b.sort, -100000, 100000, 'Order');
+    return o;
+  }
+};
+
 /* ---------- automatic BPM ----------
    New or edited songs without a BPM are measured in the background (audio-file links), or looked up in Deezer. */
-const bpmQueue = []; let bpmBusy = false;
+const bpmQueue = [], bpmLog = []; let bpmBusy = false;
+const logBpm = (id, title, r) => { bpmLog.unshift({ id, title, bpm: r.bpm || null, source: r.source || null, notes: r.notes || [], at: Date.now() }); bpmLog.length = Math.min(bpmLog.length, 150); };
 function queueBpm(id) { if (!bpmQueue.includes(id)) { bpmQueue.push(id); runBpm(); } }
 async function runBpm() {
   if (bpmBusy) return; bpmBusy = true;
@@ -246,6 +352,7 @@ async function runBpm() {
         const t = (await q('SELECT t.id,t.title,t.link,t.bpm,a.name AS artist FROM tracks t LEFT JOIN artists a ON a.id=t.artist_id WHERE t.id=$1', [id])).rows[0];
         if (!t || t.bpm || !t.link) continue;
         const r = await detectTrack(t);
+        logBpm(id, t.title, r);
         if (r.bpm) await q('UPDATE tracks SET bpm=$1,bpm_source=$2,bpm_checked=now() WHERE id=$3 AND bpm IS NULL', [r.bpm, r.source, id]);
         else await q('UPDATE tracks SET bpm_checked=now() WHERE id=$1', [id]);
       } catch (e) { console.error('BPM detection failed for song', id, e.message); }
@@ -301,6 +408,7 @@ app.post('/api/admin/bpm/file', ...admin, express.raw({ type: () => true, limit:
   try { const r = await fromBuffer(req.body); res.json({ bpm: r.bpm, confidence: r.confidence, source: 'file', notes: [] }); }
   catch (e) { throw fail(400, e.message); }
 }));
+app.get('/api/admin/bpm/status', admin, wrap(async (_req, res) => res.json({ pending: bpmQueue.length + (bpmBusy ? 1 : 0), busy: bpmBusy, log: bpmLog })));
 app.post('/api/admin/bpm/missing', admin, wrap(async (_req, res) => {
   const ids = (await q('SELECT id FROM tracks WHERE bpm IS NULL AND link IS NOT NULL ORDER BY id')).rows.map(r => r.id);
   ids.forEach(queueBpm);
@@ -308,10 +416,10 @@ app.post('/api/admin/bpm/missing', admin, wrap(async (_req, res) => {
 }));
 
 const UP = path.join(__dirname, '..', 'public', 'uploads');
-const EXT = { jpg: 8, jpeg: 8, png: 8, webp: 8, gif: 8, mp4: 250, webm: 250, mov: 250 };
+const EXT = { jpg: 8, jpeg: 8, png: 8, webp: 8, gif: 8, mp4: 250, webm: 250, mov: 250, mp3: 60, m4a: 60, aac: 60, ogg: 60, wav: 80, flac: 80 };
 app.post('/api/admin/upload', ...admin, express.raw({ type: () => true, limit: '250mb' }), wrap(async (req, res) => {
   const ext = String(req.query.name || '').split('.').pop().toLowerCase();
-  if (!EXT[ext]) throw fail(400, 'Use a jpg, png, webp, gif, mp4, webm or mov file.');
+  if (!EXT[ext]) throw fail(400, 'Use a jpg, png, webp, gif, mp4, webm, mov, mp3, m4a, wav, ogg or flac file.');
   if (!Buffer.isBuffer(req.body) || !req.body.length) throw fail(400, 'The file was empty.');
   if (req.body.length > EXT[ext] * 1024 * 1024) throw fail(400, `That file is too big (limit ${EXT[ext]} MB).`);
   fs.mkdirSync(UP, { recursive: true });
@@ -327,15 +435,17 @@ app.get('/api/admin/:res', admin, wrap(async (req, res) => {
 }));
 app.post('/api/admin/:res', admin, wrap(async (req, res) => {
   const r = req.params.res, cols = RES[r]; if (!cols) throw fail(404, 'Not found.');
-  const keys = cols.filter(c => c in req.body);
-  const row = (await q(`INSERT INTO ${r}(${keys.join(',')}) VALUES(${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING id`, keys.map(k => clean(req.body[k])))).rows[0];
+  const body = VALIDATE[r] ? VALIDATE[r](req.body || {}, true) : req.body || {};
+  const keys = cols.filter(c => c in body);
+  const row = (await q(`INSERT INTO ${r}(${keys.join(',')}) VALUES(${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING id`, keys.map(k => clean(body[k])))).rows[0];
   if (r === 'tracks') queueBpm(row.id);
   res.json(row);
 }));
 app.put('/api/admin/:res/:id', admin, wrap(async (req, res) => {
   const r = req.params.res, cols = RES[r]; if (!cols) throw fail(404, 'Not found.');
-  const keys = cols.filter(c => c in req.body);
-  if (keys.length) await q(`UPDATE ${r} SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1}`, [...keys.map(k => clean(req.body[k])), +req.params.id]);
+  const body = VALIDATE[r] ? VALIDATE[r](req.body || {}, false) : req.body || {};
+  const keys = cols.filter(c => c in body);
+  if (keys.length) await q(`UPDATE ${r} SET ${keys.map((k, i) => `${k}=$${i + 1}`).join(',')} WHERE id=$${keys.length + 1}`, [...keys.map(k => clean(body[k])), +req.params.id]);
   if (r === 'tracks' && (keys.includes('link') || keys.includes('bpm'))) queueBpm(+req.params.id);
   res.json({ ok: true });
 }));
@@ -350,6 +460,12 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 app.get('/.well-known/assetlinks.json', (_req, res) => {
   const pkg = process.env.ANDROID_PACKAGE, fp = (process.env.ANDROID_SHA256 || '').split(',').map(s => s.trim()).filter(Boolean);
   res.json(pkg && fp.length ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: fp } }] : []);
+});
+app.use((err, _req, res, next) => {
+  if (!err) return next();
+  // our own deliberate errors (rate limit, sign-in, ...) keep their message; broken requests get a plain one
+  if (err.status && !err.type) return res.status(err.status).json({ error: err.status < 500 ? err.message : 'Server error' });
+  res.status(err.status && err.status < 500 ? err.status : 400).json({ error: err.type === 'entity.too.large' ? 'That request is too large.' : 'That request was not understood.' });
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'], setHeaders: (res, f) => { if (/sw\.js$/.test(f)) res.setHeader('Cache-Control', 'no-cache'); } }));
 
